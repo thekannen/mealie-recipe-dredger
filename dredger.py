@@ -12,19 +12,22 @@ def str_to_bool(v):
     return str(v).lower() in ("yes", "true", "t", "1")
 
 # Mealie Settings
-MEALIE_ENABLED = str_to_bool(os.getenv('MEALIE_ENABLED', 'True'))
+# This logic defaults to True if the variable is missing.
+# If the user sets it to "False", "No", or anything else, it becomes False.
+MEALIE_ENABLED = os.getenv('MEALIE_ENABLED', 'True').lower() == 'true'
 MEALIE_URL = os.getenv('MEALIE_URL', 'http://192.168.1.100:9000')
 MEALIE_API_TOKEN = os.getenv('MEALIE_API_TOKEN', 'your_mealie_token_here')
 
 # Tandoor Settings
-TANDOOR_ENABLED = str_to_bool(os.getenv('TANDOOR_ENABLED', 'False'))
+# This logic defaults to False if the variable is missing.
+TANDOOR_ENABLED = os.getenv('TANDOOR_ENABLED', 'False').lower() == 'true'
 TANDOOR_URL = os.getenv('TANDOOR_URL', 'http://192.168.1.101:8080')
 TANDOOR_API_KEY = os.getenv('TANDOOR_API_KEY', 'your_tandoor_key_here')
 
 # 🛑 GENERAL SETTINGS
-DRY_RUN = False               # Set to True to test without importing
-TARGET_RECIPES_PER_SITE = 50  # Goal: Grab this many NEW recipes per site
-SCAN_DEPTH = 1000             # Look at the last X posts to find those recipes
+DRY_RUN = os.getenv('DRY_RUN', 'False').lower() == 'true'                # Set to True to test without importing
+TARGET_RECIPES_PER_SITE = int(os.getenv('TARGET_RECIPES_PER_SITE', 50))  # Goal: Grab this many NEW recipes per site
+SCAN_DEPTH = int(os.getenv('SCAN_DEPTH', 1000))                          # Look at the last X posts to find those recipes
 HEADERS = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
 
 # 🏆 THE CURATED LIST
