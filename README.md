@@ -23,7 +23,7 @@ The most efficient way to run the Dredger is using Docker. You do not need to cl
 ```yaml
 services:
   recipe-dredger:
-    image: ghcr.io/d0rk4ce/recipe-dredger:latest
+    image: ghcr.io/d0rk4ce/mealie-recipe-dredger:latest
     container_name: recipe-dredger
     environment:
       - MEALIE_ENABLED=true
@@ -74,7 +74,7 @@ If you prefer to run the script manually without Docker:
     ```
 
 3.  **Configure:**
-    Open `mealie_dredger.py` and edit the default values in the `CONFIGURATION` block, or export environment variables in your terminal.
+    Open `dredger.py` and edit the default values in the `CONFIGURATION` block, or export environment variables in your terminal.
 
 4.  **Run:**
     ```bash
