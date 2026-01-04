@@ -64,7 +64,7 @@ If you prefer to run the script manually without Docker:
 
 1.  **Clone the repository:**
     ```bash
-    git clone https://github.com/d0rk4ce/recipe-dredger.git
+    git clone https://github.com/d0rk4ce/mealie-recipe-dredger.git
     cd recipe-dredger
     ```
 
@@ -78,7 +78,7 @@ If you prefer to run the script manually without Docker:
 
 4.  **Run:**
     ```bash
-    python mealie_dredger.py
+    python dredger.py
     ```
 
 ## ⚠️ Disclaimer & Ethics
