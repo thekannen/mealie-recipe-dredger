@@ -28,15 +28,23 @@ services:
     image: ghcr.io/d0rk4ce/mealie-recipe-dredger:latest
     container_name: recipe-dredger
     environment:
+      # --- Connection Settings ---
       - MEALIE_ENABLED=true
-      - MEALIE_URL=http://192.168.1.X:9000
+      - MEALIE_URL=[http://192.168.1.](http://192.168.1.)X:9000
       - MEALIE_API_TOKEN=your_mealie_token
       - TANDOOR_ENABLED=false
-      - TANDOOR_URL=http://192.168.1.X:8080
+      - TANDOOR_URL=[http://192.168.1.](http://192.168.1.)X:8080
       - TANDOOR_API_KEY=your_tandoor_key
-      - SCRAPE_LANG=en,de  # Supports comma-separated lists
+      
+      # --- Scraper Behavior ---
+      - DRY_RUN=false                  # Set to true to test without importing
+      - TARGET_RECIPES_PER_SITE=50     # Stop after importing this many per site
+      - SCAN_DEPTH=1000                # How many links to check before giving up on a site
+      - SCRAPE_LANG=en,de              # Filter content by language
+      
+      # --- Sources ---
       # Optional: Override the built-in site list
-      - SITES= https://example.com,https://another-blog.com
+      - SITES=[https://example.com](https://example.com),[https://another-blog.com](https://another-blog.com)
     restart: "no"
 ```
 
@@ -65,6 +73,9 @@ To run this weekly (e.g., Sundays at 3am), add an entry to your host's crontab:
 | `SCRAPE_LANG` | `en` | Comma-separated ISO codes for allowed languages (e.g., `en` or `en,de`). |
 | `SITES` | (Curated List) | A comma-separated list of blog URLs to scrape (overrides the built-in list). |
 
+| `DRY_RUN` | `False` | Set to `true` to scan and log without actually importing. Great for testing. |
+| `TARGET_RECIPES_PER_SITE` | `50` | Stops scanning a specific site after importing this many recipes. |
+| `SCAN_DEPTH` | `1000` | Maximum number of sitemap links to check per site before giving up. |
 ## 🐍 Manual Usage (Python)
 
 If you prefer to run the script manually without Docker:
