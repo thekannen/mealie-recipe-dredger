@@ -30,10 +30,10 @@ services:
     environment:
       # --- Connection Settings ---
       - MEALIE_ENABLED=true
-      - MEALIE_URL=[http://192.168.1.](http://192.168.1.)X:9000
+      - MEALIE_URL=http://192.168.1.X:9000
       - MEALIE_API_TOKEN=your_mealie_token
       - TANDOOR_ENABLED=false
-      - TANDOOR_URL=[http://192.168.1.](http://192.168.1.)X:8080
+      - TANDOOR_URL=http://192.168.1.X:8080
       - TANDOOR_API_KEY=your_tandoor_key
       
       # --- Scraper Behavior ---
@@ -44,7 +44,7 @@ services:
       
       # --- Sources ---
       # Optional: Override the built-in site list
-      - SITES=[https://example.com](https://example.com),[https://another-blog.com](https://another-blog.com)
+      - SITES=https://example.com,https://another-blog.com
     restart: "no"
 ```
 
