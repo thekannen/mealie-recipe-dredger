@@ -11,23 +11,24 @@ This script automates the process of finding **new** recipes. It scans a curated
 ## 🚀 Features
 
 * **Multi-Platform:** Supports importing to **Mealie** (Primary) and **Tandoor** (Experimental).
+* **Smart Memory:** Uses local JSON files to remember rejected and successfully imported URLs.
 * **Multi-Language Support:** Automatically detects and filters recipes. Supports single or multiple languages (e.g., `en` or `en,de,fr`).
 * **Smart Deduplication:** Checks your existing libraries first. It will never import a URL you already have.
 * **Recipe Verification:** Scans candidate pages for Schema.org JSON-LD to ensure it only imports actual recipes.
-* **Deep Sitemap Scanning:** Automatically parses XML sitemaps to find the most recent posts.
+* **Deep Sitemap Scanning:** Automatically parses XML sitemaps and robots.txt to find the most recent posts.
 * **Curated Source List:** Comes pre-loaded with over 100+ high-quality food blogs covering African, Caribbean, East Asian, Latin American, and General Western cuisines.
 
 ## 🐳 Quick Start (Docker)
 
 The most efficient way to run the Dredger is using Docker. You do not need to clone the repository or install Python.
 
-1.  Create a `docker-compose.yml` file:
+1. Create a `docker-compose.yml` file:
 
 ```yaml
 services:
-  recipe-dredger:
+  mealie-recipe-dredger:
     image: ghcr.io/d0rk4ce/mealie-recipe-dredger:latest
-    container_name: recipe-dredger
+    container_name: mealie-recipe-dredger
     environment:
       # --- Connection Settings ---
       - MEALIE_ENABLED=true
@@ -46,10 +47,12 @@ services:
       # --- Sources ---
       # Optional: Override the built-in site list
       - SITES=https://example.com,https://another-blog.com
+    volumes:
+      - ./data:/app
     restart: "no"
 ```
 
-2.  Run the tool:
+2. Run the tool:
     ```bash
     docker compose up
     ```
@@ -81,28 +84,28 @@ To run this weekly (e.g., Sundays at 3am), add an entry to your host's crontab:
 
 If you prefer to run the script manually without Docker:
 
-1.  **Clone the repository:**
+1. **Clone the repository:**
     ```bash
     git clone https://github.com/d0rk4ce/mealie-recipe-dredger.git
     cd mealie-recipe-dredger
     ```
 
-2.  **Install dependencies:**
+2. **Install dependencies:**
     ```bash
     pip install -r requirements.txt
     ```
 
-3.  **Configure:**
+3. **Configure:**
     Open `dredger.py` and edit the default values in the `CONFIGURATION` block, or export environment variables in your terminal.
 
-4.  **Run:**
+4. **Run:**
     ```bash
     python dredger.py
     ```
 
 ## 🤝 Contributors
 
-* **@rpowel and @johnfawkes** - Stability and logging fixes in v1.0.0-beta.5.
+* **@rpowel** and **@johnfawkes** - Stability and logging fixes in v1.0.0-beta.5.
 
 ## ⚠️ Disclaimer & Ethics
 
