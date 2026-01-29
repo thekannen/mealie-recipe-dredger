@@ -14,8 +14,8 @@ This script automates the process of finding **new** recipes. It scans a curated
 * **Smart Memory:** Uses local JSON files to remember rejected and successfully imported URLs.
 * **Multi-Language Support:** Automatically detects and filters recipes. Supports single or multiple languages (e.g., `en` or `en,de,fr`).
 * **Smart Deduplication:** Checks your existing libraries first. It will never import a URL you already have.
-* **Recipe Verification:** Scans candidate pages for Schema.org JSON-LD to ensure it only imports actual recipes.
-* **Deep Sitemap Scanning:** Automatically parses XML sitemaps and robots.txt to find the most recent posts.
+* **Recipe Verification:** Scans pages for Schema.org JSON-LD or standard recipe CSS classes to ensure it only imports actual recipes.
+* **Deep Sitemap Scanning:** Automatically parses XML sitemaps (including recursive indexes) and robots.txt to find the most recent posts.
 * **Curated Source List:** Comes pre-loaded with over 100+ high-quality food blogs covering African, Caribbean, East Asian, Latin American, and General Western cuisines.
 
 ## 🐳 Quick Start (Docker)
@@ -135,7 +135,7 @@ If you prefer to run the script manually without Docker:
     ```
 
 3. **Configure:**
-    Open `dredger.py` or `maintenance/master_cleaner.py` and edit the default values in the `CONFIGURATION` block, or export environment variables in your terminal.
+    Create a `.env` file in the project root (see `docker-compose.yml` for variable names) OR export environment variables in your terminal.
 
 4. **Run:**
     ```bash
