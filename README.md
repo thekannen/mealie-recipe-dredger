@@ -32,10 +32,10 @@ services:
     environment:
       # --- Connection Settings ---
       - MEALIE_ENABLED=true
-      - MEALIE_URL=[http://192.168.1.](http://192.168.1.)X:9000
+      - MEALIE_URL=http://192.168.1.X:9000
       - MEALIE_API_TOKEN=your_mealie_token
       - TANDOOR_ENABLED=false
-      - TANDOOR_URL=[http://192.168.1.](http://192.168.1.)X:8080
+      - TANDOOR_URL=http://192.168.1.X:8080
       - TANDOOR_API_KEY=your_tandoor_key
       
       # --- Scraper Behavior ---
@@ -47,7 +47,7 @@ services:
       
       # --- Sources ---
       # Optional: Override the built-in site list
-      # - SITES=[https://example.com](https://example.com),[https://another-blog.com](https://another-blog.com)
+      # - SITES=https://example.com,https://another-blog.com
     volumes:
       - ./data:/app/data
     restart: "no"
@@ -65,11 +65,11 @@ services:
       - MAX_WORKERS=2           # Default is 2 to prevent database locks
       # --- Mealie Config ---
       - MEALIE_ENABLED=true
-      - MEALIE_URL=[http://192.168.1.](http://192.168.1.)X:9000
+      - MEALIE_URL=http://192.168.1.X:9000
       - MEALIE_API_TOKEN=your_mealie_token
       # --- Tandoor Config ---
       - TANDOOR_ENABLED=false
-      - TANDOOR_URL=[http://192.168.1.](http://192.168.1.)X:8080
+      - TANDOOR_URL=http://192.168.1.X:8080
       - TANDOOR_API_KEY=your_tandoor_key
     volumes:
       - ./data:/app/data
@@ -125,7 +125,7 @@ If you prefer to run the script manually without Docker:
 
 1. **Clone the repository:**
     ```bash
-    git clone [https://github.com/d0rk4ce/mealie-recipe-dredger.git](https://github.com/d0rk4ce/mealie-recipe-dredger.git)
+    git clone https://github.com/d0rk4ce/mealie-recipe-dredger.git
     cd mealie-recipe-dredger
     ```
 
