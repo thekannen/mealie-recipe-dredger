@@ -2,27 +2,15 @@ services:
   mealie-recipe-dredger:
     image: ghcr.io/d0rk4ce/mealie-recipe-dredger:latest
     container_name: mealie-recipe-dredger
-    environment:
-      # --- Connection Settings ---
-      - MEALIE_ENABLED=true
-      - MEALIE_URL=http://192.168.1.X:9000
-      - MEALIE_API_TOKEN=your_mealie_token
-      - TANDOOR_ENABLED=false
-      - TANDOOR_URL=http://192.168.1.X:8080
-      - TANDOOR_API_KEY=your_tandoor_key
-      
-      # --- Scraper Behavior ---
-      - DRY_RUN=true                  # 🛡️ SAFETY: Defaults to True. Change to false to import.
-      - LOG_LEVEL=INFO                # ℹ️ LOGGING: Change to DEBUG for verbose details.
-      - TARGET_RECIPES_PER_SITE=50     # Stop after importing this many per site
-      - SCAN_DEPTH=1000                # How many links to check before giving up on a site
-      - SCRAPE_LANG=en,de              # Filter content by language
-      
-      # --- Sources ---
-      # Optional: Override the built-in site list
-      - SITES=https://example.com,https://another-blog.com
+    
+    # All secrets and configuration loaded from .env file
+    env_file:
+      - .env
+    
     volumes:
-      - ./data:/app/data
+      - ./data:/app/data                    # Persistent data (imported.json, rejects.json, etc.)
+      - ./sites.json:/app/sites.json:ro     # Custom site list (read-only)
+    
     restart: "no"
     
   # 🧹 Maintenance: Master Cleaner
@@ -32,18 +20,17 @@ services:
     container_name: mealie-cleaner
     command: python maintenance/master_cleaner.py
     profiles: ["maintenance"]
+    
+    # Inherits settings from .env
+    env_file:
+      - .env
+    
+    # Optional: Override specific settings for cleaner
     environment:
-      - DRY_RUN=true            # 🛡️ SAFETY: Set to false to DELETE recipes
-      - LOG_LEVEL=INFO          # ℹ️ LOGGING: Change to DEBUG for verbose details.
-      - MAX_WORKERS=2           # Default is 2 to prevent database locks
-      # --- Mealie Config ---
-      - MEALIE_ENABLED=true
-      - MEALIE_URL=http://192.168.1.X:9000
-      - MEALIE_API_TOKEN=your_mealie_token
-      # --- Tandoor Config ---
-      - TANDOOR_ENABLED=false
-      - TANDOOR_URL=http://192.168.1.X:8080
-      - TANDOOR_API_KEY=your_tandoor_key
+      - DRY_RUN=true         # 🛡️ Extra safety: ensure dry-run
+      - MAX_WORKERS=2        # Cleaner-specific: prevent database locks
+    
     volumes:
       - ./data:/app/data
+    
     restart: "no"
