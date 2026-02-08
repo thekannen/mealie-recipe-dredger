@@ -1,6 +1,16 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [1.0.0-beta.10] - 2026-02-08
+
+### Fixed
+- **Mealie Import API Compatibility:** Added endpoint fallback support for both `/api/recipes/create/url` (current) and `/api/recipes/create-url` (legacy), fixing `405 Method Not Allowed` failures on newer Mealie versions.
+- **Sitemap Discovery Reliability:** Standard sitemap probes now follow redirects and gracefully fall back to `GET` when sites reject `HEAD` requests.
+
+### Changed
+- **Cleaner Debug Output:** Suppressed noisy charset detection debug logs from dependency libraries to keep DEBUG output focused on actionable network/import events.
+- **Versioning:** Runtime version string updated to `1.0.0-beta.10`.
+
 ## [1.0.0-beta.9] - 2026-02-07
 
 ### Added - Configuration & Usability

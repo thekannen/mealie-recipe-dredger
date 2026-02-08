@@ -25,7 +25,7 @@ from dataclasses import dataclass, asdict
 from datetime import datetime, timedelta
 
 # --- CONSTANTS ---
-VERSION = "1.0.0-beta.9"
+VERSION = "1.0.0-beta.10"
 
 # --- OPTIONAL VISUALS ---
 try:
@@ -46,6 +46,9 @@ logging.basicConfig(
     handlers=[logging.StreamHandler(sys.stdout)]
 )
 logger = logging.getLogger("dredger")
+# Keep dependency debug chatter (charset auto-detection) from drowning actionable logs.
+logging.getLogger("charset_normalizer").setLevel(logging.WARNING)
+logging.getLogger("chardet").setLevel(logging.WARNING)
 
 # --- CONFIGURATION DEFAULTS ---
 DEFAULT_TARGET = int(os.getenv('TARGET_RECIPES_PER_SITE', 50))
@@ -365,8 +368,8 @@ class SitemapCrawler:
             r = self.session.get(f"{base_url}/robots.txt", timeout=5)
             if r.status_code == 200:
                 for line in r.text.splitlines():
-                    if "Sitemap:" in line:
-                        return line.split("Sitemap:")[1].strip()
+                    if line.lower().startswith("sitemap:"):
+                        return line.split(":", 1)[1].strip()
         except: 
             pass
         
@@ -381,9 +384,17 @@ class SitemapCrawler:
         
         for url in candidates:
             try:
-                r = self.session.head(url, timeout=5)
-                if r.status_code == 200: 
-                    return url
+                # HEAD avoids downloading full XML, but we follow redirects so
+                # canonical host/domain changes (www -> apex, https -> http) still work.
+                r = self.session.head(url, timeout=5, allow_redirects=True)
+                if r.status_code == 200:
+                    return r.url
+                if r.status_code in [405, 501]:
+                    # Some hosts do not support HEAD on sitemap paths.
+                    fallback = self.session.get(url, timeout=5, allow_redirects=True, stream=True)
+                    fallback.close()
+                    if fallback.status_code == 200:
+                        return fallback.url
             except: 
                 pass
         
@@ -511,6 +522,11 @@ class ImportManager:
         self.storage = storage
         self.rate_limiter = rate_limiter
         self.dry_run = dry_run
+        self._mealie_endpoint_candidates = [
+            "/api/recipes/create/url",   # Current Mealie endpoint
+            "/api/recipes/create-url"    # Legacy compatibility
+        ]
+        self._mealie_import_path: Optional[str] = None
     
     def import_to_mealie(self, url: str) -> Tuple[bool, Optional[str]]:
         if self.dry_run:
@@ -520,21 +536,44 @@ class ImportManager:
         headers = {"Authorization": f"Bearer {MEALIE_API_TOKEN}"}
         try:
             self.rate_limiter.wait_if_needed(MEALIE_URL)
-            r = self.session.post(
-                f"{MEALIE_URL}/api/recipes/create-url", 
-                headers=headers, 
-                json={"url": url}, 
-                timeout=20
-            )
-            
-            if r.status_code == 201:
-                logger.info(f"   ✅ [Mealie] Imported: {url}")
-                return True, None
-            elif r.status_code == 409:
-                logger.info(f"   ⚠️ [Mealie] Duplicate: {url}")
-                return True, None
-            else:
-                return False, f"HTTP {r.status_code}"
+            candidate_paths = list(self._mealie_endpoint_candidates)
+            if self._mealie_import_path in candidate_paths:
+                candidate_paths.remove(self._mealie_import_path)
+                candidate_paths.insert(0, self._mealie_import_path)
+
+            endpoint_error = None
+            for path in candidate_paths:
+                r = self.session.post(
+                    f"{MEALIE_URL}{path}",
+                    headers=headers,
+                    json={"url": url},
+                    timeout=20
+                )
+
+                if r.status_code in [200, 201, 202]:
+                    if self._mealie_import_path != path:
+                        self._mealie_import_path = path
+                        logger.info(f"   [Mealie] Using import endpoint: {path}")
+                    logger.info(f"   ✅ [Mealie] Imported: {url}")
+                    return True, None
+
+                if r.status_code == 409:
+                    if self._mealie_import_path != path:
+                        self._mealie_import_path = path
+                        logger.info(f"   [Mealie] Using import endpoint: {path}")
+                    logger.info(f"   ⚠️ [Mealie] Duplicate: {url}")
+                    return True, None
+
+                if r.status_code in [404, 405]:
+                    endpoint_error = f"HTTP {r.status_code}"
+                    continue
+
+                body = r.text.strip().replace("\n", " ")
+                if len(body) > 180:
+                    body = f"{body[:177]}..."
+                return False, f"HTTP {r.status_code}" + (f" - {body}" if body else "")
+
+            return False, endpoint_error or "No compatible Mealie import endpoint found"
         
         except Exception as e:
             return False, str(e)
