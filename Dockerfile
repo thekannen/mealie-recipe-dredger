@@ -9,6 +9,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy the script
 COPY dredger.py .
+COPY sites.json .
 
 # Copy maintenance tools
 COPY maintenance/ ./maintenance/
