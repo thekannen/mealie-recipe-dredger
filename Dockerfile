@@ -1,22 +1,24 @@
-FROM python:3.9-slim
+FROM python:3.11-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
 
-# Set working directory
 WORKDIR /app
 
-# Install dependencies
-COPY requirements.txt .
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends bash curl ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY requirements.txt pyproject.toml README.md VERSION ./
+COPY src ./src
+COPY scripts ./scripts
+COPY sites.json ./
+
 RUN python -m pip install --upgrade pip \
-    && pip install --no-cache-dir -r requirements.txt
+    && pip install --no-cache-dir -r requirements.txt \
+    && pip install --no-cache-dir -e .
 
-# Copy the script
-COPY dredger.py .
-COPY sites.json .
+RUN mkdir -p /app/data
 
-# Copy maintenance tools
-COPY maintenance/ ./maintenance/
-
-# Run the script
-CMD ["python", "dredger.py"]
+ENTRYPOINT ["/app/scripts/docker/entrypoint.sh"]
+CMD []

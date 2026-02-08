@@ -1,0 +1,297 @@
+from __future__ import annotations
+
+import argparse
+import json
+import logging
+import os
+import random
+import sys
+from typing import Any, List
+
+from .config import (
+    DEFAULT_DEPTH,
+    DEFAULT_SITES,
+    DEFAULT_TARGET,
+    DRY_RUN,
+    MAX_RETRY_ATTEMPTS,
+    MEALIE_API_TOKEN,
+    MEALIE_ENABLED,
+    __version__,
+)
+from .logging_utils import configure_logging
+
+try:
+    from tqdm import tqdm
+
+    TQDM_AVAILABLE = True
+except ImportError:
+    TQDM_AVAILABLE = False
+
+logger = logging.getLogger("dredger")
+
+
+def validate_config() -> None:
+    issues = []
+
+    if not MEALIE_ENABLED and not DRY_RUN:
+        issues.append("⚠️  Warning: Mealie is disabled. Nothing will be imported!")
+
+    if MEALIE_ENABLED and MEALIE_API_TOKEN == "your-token":
+        issues.append("⚠️  Warning: MEALIE_API_TOKEN not configured (still set to default)")
+
+    for issue in issues:
+        logger.warning(issue)
+
+
+def print_summary(storage: StorageManager) -> None:
+    logger.info("=" * 50)
+    logger.info("📊 Session Summary:")
+    logger.info(f"   Total Imported: {len(storage.imported)}")
+    logger.info(f"   Total Rejected: {len(storage.rejects)}")
+    logger.info(f"   In Retry Queue: {len(storage.retry_queue)}")
+    logger.info(f"   Cached Sitemaps: {len(storage.sitemap_cache)}")
+    logger.info("=" * 50)
+
+
+def process_retry_queue(
+    storage: Any,
+    verifier: Any,
+    importer: Any,
+    rate_limiter: Any,
+) -> None:
+    if not storage.retry_queue:
+        return
+
+    pending = list(storage.retry_queue.items())
+    logger.info(f"🔁 Processing Retry Queue: {len(pending)} URL(s)")
+
+    for url, meta in pending:
+        attempts = int(meta.get("attempts", 0))
+        if attempts >= MAX_RETRY_ATTEMPTS:
+            logger.warning(f"   ❌ Giving up after {attempts} attempts: {url}")
+            storage.remove_retry(url)
+            storage.add_reject(url)
+            continue
+
+        rate_limiter.wait_if_needed(url)
+        is_recipe, _, verify_error, verify_transient = verifier.verify_recipe(url)
+
+        if not is_recipe:
+            if verify_transient:
+                storage.add_retry(url, verify_error or "Transient verification failure", increment=True)
+                logger.warning(
+                    f"   ↻ Retry queued ({storage.retry_queue[url]['attempts']}/{MAX_RETRY_ATTEMPTS}) [verify]: {url}"
+                )
+            else:
+                storage.remove_retry(url)
+                storage.add_reject(url)
+            continue
+
+        imported, import_error, import_transient = importer.import_recipe(url)
+        if imported:
+            storage.add_imported(url)
+            continue
+
+        if import_transient:
+            storage.add_retry(url, import_error or "Transient import failure", increment=True)
+            logger.warning(
+                f"   ↻ Retry queued ({storage.retry_queue[url]['attempts']}/{MAX_RETRY_ATTEMPTS}) [import]: {url}"
+            )
+        else:
+            storage.remove_retry(url)
+            storage.add_reject(url)
+
+
+def _parse_sites_json(data) -> List[str]:
+    if isinstance(data, list):
+        return [s for s in data if isinstance(s, str) and s.startswith("http")]
+
+    if isinstance(data, dict) and "sites" in data:
+        sites = data["sites"]
+        return [s for s in sites if isinstance(s, str) and s.startswith("http")]
+
+    logger.error("Invalid sites.json format. Expected array or object with 'sites' key.")
+    return []
+
+
+def load_sites_from_source(source_path: str = None) -> List[str]:
+    """Load sites with priority: CLI > env override > local file > defaults."""
+
+    if source_path:
+        if os.path.exists(source_path):
+            try:
+                with open(source_path, "r", encoding="utf-8") as handle:
+                    data = json.load(handle)
+                return _parse_sites_json(data)
+            except Exception as exc:
+                logger.error(f"Failed to load CLI sites file: {exc}")
+                sys.exit(1)
+        logger.error(f"File not found: {source_path}")
+        sys.exit(1)
+
+    if os.getenv("SITES"):
+        sites_env = os.getenv("SITES", "").strip()
+
+        if os.path.exists(sites_env):
+            try:
+                with open(sites_env, "r", encoding="utf-8") as handle:
+                    data = json.load(handle)
+                return _parse_sites_json(data)
+            except Exception as exc:
+                logger.error(f"Failed to load sites file from SITES={sites_env}: {exc}")
+                sys.exit(1)
+
+        return [site.strip() for site in sites_env.split(",") if site.strip().startswith("http")]
+
+    if os.path.exists("sites.json"):
+        try:
+            with open("sites.json", "r", encoding="utf-8") as handle:
+                data = json.load(handle)
+            return _parse_sites_json(data)
+        except Exception as exc:
+            logger.warning(f"Failed to load sites.json: {exc}")
+
+    return DEFAULT_SITES
+
+
+def build_arg_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="Recipe Dredger: Intelligent Scraper")
+    parser.add_argument("--dry-run", action="store_true", help="Scan without importing")
+    parser.add_argument("--limit", type=int, default=DEFAULT_TARGET, help="Recipes to import per site")
+    parser.add_argument("--depth", type=int, default=DEFAULT_DEPTH, help="URLs to scan per site")
+    parser.add_argument("--sites", type=str, help="Path to JSON file containing site URLs")
+    parser.add_argument("--no-cache", action="store_true", help="Force fresh crawl (ignore sitemap cache)")
+    parser.add_argument("--version", action="version", version=f"Recipe Dredger {__version__}")
+    return parser
+
+
+def run(args: argparse.Namespace) -> int:
+    from .crawler import SitemapCrawler
+    from .importer import ImportManager
+    from .runtime import GracefulKiller, RateLimiter, get_session
+    from .storage import StorageManager
+    from .verifier import RecipeVerifier
+
+    dry_run_mode = args.dry_run or DRY_RUN
+    target_count = args.limit
+    scan_depth_count = args.depth
+    force_refresh = args.no_cache
+
+    validate_config()
+    sites_list = load_sites_from_source(args.sites)
+
+    logger.info(f"🍲 Recipe Dredger Started ({__version__})")
+    logger.info(f"   Mode: {'DRY RUN' if dry_run_mode else 'LIVE IMPORT'}")
+    logger.info(f"   Targets: {len(sites_list)} sites")
+    logger.info(f"   Limit: {target_count} per site")
+
+    storage = StorageManager()
+    killer = GracefulKiller()
+    session = get_session()
+    rate_limiter = RateLimiter()
+    crawler = SitemapCrawler(session, storage)
+    verifier = RecipeVerifier(session)
+    importer = ImportManager(session, storage, rate_limiter, dry_run_mode)
+
+    process_retry_queue(storage, verifier, importer, rate_limiter)
+
+    random.shuffle(sites_list)
+
+    iterator = sites_list
+    if TQDM_AVAILABLE and len(sites_list) > 1:
+        iterator = tqdm(sites_list, desc="Processing Sites", unit="site")
+
+    for site in iterator:
+        if killer.kill_now:
+            break
+
+        if not TQDM_AVAILABLE:
+            logger.info(f"🌍 Processing Site: {site}")
+
+        site_stats = {"imported": 0, "rejected": 0, "errors": 0}
+
+        raw_candidates = crawler.get_urls_for_site(site, force_refresh=force_refresh)
+        if not raw_candidates:
+            continue
+
+        candidates = raw_candidates[:scan_depth_count]
+        random.shuffle(candidates)
+
+        imported_count = 0
+        for candidate in candidates:
+            if killer.kill_now:
+                break
+
+            if imported_count >= target_count:
+                break
+
+            url = candidate.url
+
+            if url in storage.imported or url in storage.rejects or url in storage.retry_queue:
+                continue
+
+            rate_limiter.wait_if_needed(url)
+
+            is_recipe, _, error, is_transient = verifier.verify_recipe(url)
+
+            if is_recipe:
+                imported, import_error, import_transient = importer.import_recipe(url)
+                if imported:
+                    storage.add_imported(url)
+                    imported_count += 1
+                    site_stats["imported"] += 1
+                else:
+                    site_stats["errors"] += 1
+                    if import_transient:
+                        storage.add_retry(url, import_error or "Transient import failure", increment=True)
+                        if not TQDM_AVAILABLE:
+                            logger.warning(
+                                f"   ↻ Transient import failure queued for retry "
+                                f"({storage.retry_queue[url]['attempts']}/{MAX_RETRY_ATTEMPTS}): {url}"
+                            )
+                    else:
+                        storage.add_reject(url)
+                        if not TQDM_AVAILABLE:
+                            logger.error(f"   ❌ Import failed ({import_error}): {url}")
+            else:
+                if is_transient:
+                    storage.add_retry(url, error or "Transient verification failure", increment=True)
+                    if not TQDM_AVAILABLE:
+                        logger.warning(
+                            f"   ↻ Transient verification failure queued for retry "
+                            f"({storage.retry_queue[url]['attempts']}/{MAX_RETRY_ATTEMPTS}): {url}"
+                        )
+                else:
+                    if not TQDM_AVAILABLE:
+                        logger.debug(f"   Skipping ({error}): {url}")
+                    storage.add_reject(url)
+                    site_stats["rejected"] += 1
+
+        if not TQDM_AVAILABLE:
+            logger.info(
+                f"   Site Results: {site_stats['imported']} imported, "
+                f"{site_stats['rejected']} rejected, {site_stats['errors']} errors"
+            )
+
+        storage.flush_all()
+
+    if not killer.kill_now:
+        print_summary(storage)
+    else:
+        logger.info("⏸️  Gracefully stopped by signal")
+
+    logger.info("🏁 Dredge Cycle Complete")
+    return 0
+
+
+def main() -> None:
+    global logger
+    logger = configure_logging("dredger")
+
+    parser = build_arg_parser()
+    args = parser.parse_args()
+    raise SystemExit(run(args))
+
+
+if __name__ == "__main__":
+    main()

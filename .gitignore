@@ -3,6 +3,8 @@ __pycache__/
 *.py[cod]
 *$py.class
 *.so
+.coverage
+.coverage.*
 .Python
 env/
 venv/
@@ -56,7 +58,7 @@ Thumbs.db
 *.tmp
 *.temp
 .cache/
-
-# Project-specific
-update_readme.py
-housekeeping.py
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+htmlcov/

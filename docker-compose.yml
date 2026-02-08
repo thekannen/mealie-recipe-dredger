@@ -4,37 +4,35 @@ services:
       context: .
     image: mealie-recipe-dredger:latest
     container_name: mealie-recipe-dredger
-    
-    # All secrets and configuration loaded from .env file
+    restart: "no"
     env_file:
       - .env
-    
+    environment:
+      TASK: dredger
+      RUN_MODE: once
+      RUN_INTERVAL_SECONDS: 21600
     volumes:
-      - ./data:/app/data                    # Persistent data (imported.json, rejects.json, etc.)
-      - ./sites.json:/app/sites.json:ro     # Runtime-editable site list
-    
-    restart: "no"
-    
-  # 🧹 Maintenance: Master Cleaner
-  # Run manually with: docker compose run --rm mealie-cleaner
+      - ./data:/app/data
+      - ./sites.json:/app/sites.json:ro
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
   mealie-cleaner:
     build:
       context: .
     image: mealie-recipe-dredger:latest
     container_name: mealie-cleaner
-    command: python maintenance/master_cleaner.py
+    restart: "no"
     profiles: ["maintenance"]
-    
-    # Inherits settings from .env
     env_file:
       - .env
-    
-    # Optional: Override specific settings for cleaner
     environment:
-      - DRY_RUN=true         # 🛡️ Extra safety: ensure dry-run
-      - MAX_WORKERS=2        # Cleaner-specific: prevent database locks
-    
+      TASK: cleaner
+      RUN_MODE: once
+      DRY_RUN: true
+      MAX_WORKERS: 2
     volumes:
       - ./data:/app/data
-    
-    restart: "no"
+      - ./sites.json:/app/sites.json:ro
+    extra_hosts:
+      - "host.docker.internal:host-gateway"

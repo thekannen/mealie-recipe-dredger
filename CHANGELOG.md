@@ -1,6 +1,17 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [1.0.0-beta.12] - 2026-02-08
+
+### Changed
+- **Structural Refactor:** Split the old monolithic `dredger.py` into a standardized package layout under `src/mealie_recipe_dredger/`.
+- **Python Project Standardization:** Added `pyproject.toml`, `VERSION`, package entrypoints, and a `tests/` directory.
+- **Docker Runtime Standardization:** Added `scripts/docker/entrypoint.sh` with `TASK`/`RUN_MODE` controls to mirror `mealie-organizer` conventions.
+- **Fork Documentation Refresh:** README/Setup guide rewritten to explicitly identify this repository as a fork and credit the original author (@D0rk4ce).
+
+### Fixed
+- **Entrypoint Cleanup:** Removed legacy root wrappers and now run exclusively via package entrypoints (`mealie-dredger`, `mealie-cleaner`) and Docker `TASK` routing.
+
 ## [1.0.0-beta.11] - 2026-02-08
 
 ### Fixed
