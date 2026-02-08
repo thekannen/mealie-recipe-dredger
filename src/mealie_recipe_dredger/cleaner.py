@@ -6,7 +6,7 @@ import re
 import sys
 import time
 from pathlib import Path
-from typing import Dict, Optional, Set, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 from urllib.parse import urlparse
 
 import requests
@@ -56,6 +56,13 @@ LISTICLE_REGEX = re.compile(
 )
 
 logger = logging.getLogger("cleaner")
+IntegrityResult = Tuple[str, str, str, Optional[str]]
+
+
+def _as_optional_str(value: object) -> Optional[str]:
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+    return None
 
 
 def load_json_set(filename: Path) -> Set[str]:
@@ -72,12 +79,12 @@ def save_json_set(filename: Path, data_set: Set[str]) -> None:
     filename.write_text(json.dumps(list(data_set)), encoding="utf-8")
 
 
-def get_mealie_recipes() -> list:
+def get_mealie_recipes() -> List[Dict[str, Any]]:
     if not MEALIE_ENABLED:
         return []
 
     headers = {"Authorization": f"Bearer {MEALIE_API_TOKEN}"}
-    recipes = []
+    recipes: List[Dict[str, Any]] = []
     page = 1
     logger.info(f"Scanning Mealie library at {MEALIE_URL}...")
     while True:
@@ -89,7 +96,15 @@ def get_mealie_recipes() -> list:
             )
             if response.status_code != 200:
                 break
-            items = response.json().get("items", [])
+            payload = response.json()
+            if not isinstance(payload, dict):
+                break
+
+            raw_items = payload.get("items", [])
+            if not isinstance(raw_items, list):
+                break
+
+            items = [item for item in raw_items if isinstance(item, dict)]
             if not items:
                 break
             recipes.extend(items)
@@ -104,7 +119,14 @@ def get_mealie_recipes() -> list:
     return recipes
 
 
-def delete_mealie_recipe(slug: str, name: str, reason: str, rejects: Set[str], verified: Set[str], url: str = None) -> None:
+def delete_mealie_recipe(
+    slug: str,
+    name: str,
+    reason: str,
+    rejects: Set[str],
+    verified: Set[str],
+    url: Optional[str] = None,
+) -> None:
     if DRY_RUN:
         logger.info(f" [DRY RUN] Would delete from Mealie: '{name}' (Reason: {reason})")
         return
@@ -152,7 +174,7 @@ def is_junk_content(name: str, url: Optional[str]) -> bool:
     return False
 
 
-def validate_instructions(inst) -> bool:
+def validate_instructions(inst: Any) -> bool:
     if not inst:
         return False
 
@@ -175,13 +197,20 @@ def validate_instructions(inst) -> bool:
     return True
 
 
-def check_integrity(recipe: dict, verified: Set[str]) -> Optional[Tuple[str, str, str, Optional[str]]]:
-    slug = recipe.get("slug")
+def check_integrity(recipe: Dict[str, Any], verified: Set[str]) -> Optional[IntegrityResult]:
+    slug = _as_optional_str(recipe.get("slug"))
+    if not slug:
+        return None
+
     if slug in verified:
         return None
 
-    name = recipe.get("name")
-    url = recipe.get("orgURL") or recipe.get("originalURL") or recipe.get("source")
+    name = _as_optional_str(recipe.get("name")) or "Unknown"
+    url = (
+        _as_optional_str(recipe.get("orgURL"))
+        or _as_optional_str(recipe.get("originalURL"))
+        or _as_optional_str(recipe.get("source"))
+    )
 
     try:
         headers = {"Authorization": f"Bearer {MEALIE_API_TOKEN}"}
@@ -212,11 +241,19 @@ def run_cleaner() -> int:
         return 0
 
     logger.info("--- Phase 1: Surgical Filter Scan ---")
-    clean_tasks = []
+    clean_tasks: List[Dict[str, Any]] = []
     for recipe in tasks:
-        name = recipe.get("name", "Unknown")
-        url = recipe.get("orgURL") or recipe.get("originalURL") or recipe.get("source")
-        slug = recipe.get("slug")
+        name = _as_optional_str(recipe.get("name")) or "Unknown"
+        url = (
+            _as_optional_str(recipe.get("orgURL"))
+            or _as_optional_str(recipe.get("originalURL"))
+            or _as_optional_str(recipe.get("source"))
+        )
+        slug = _as_optional_str(recipe.get("slug"))
+
+        if not slug:
+            logger.debug(f"Skipping recipe with missing slug: {name}")
+            continue
 
         if is_junk_content(name, url):
             delete_mealie_recipe(slug, name, "JUNK CONTENT", rejects, verified, url)

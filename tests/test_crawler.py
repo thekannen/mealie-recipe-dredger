@@ -16,10 +16,10 @@ class DummySession:
     def __init__(self, xml_content: bytes):
         self.xml_content = xml_content
 
-    def get(self, _url, timeout=10, **_kwargs):
+    def get(self, url: str, timeout: int = 10, **kwargs):
         return DummyResponse(status_code=200, content=self.xml_content, text=self.xml_content.decode("utf-8"))
 
-    def head(self, _url, timeout=5, allow_redirects=True):
+    def head(self, url: str, timeout: int = 5, allow_redirects: bool = True, **kwargs):
         return DummyResponse(status_code=404, url="")
 
 

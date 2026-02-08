@@ -1,17 +1,41 @@
 import logging
-from typing import List, Optional
-
-import requests
+from typing import Any, List, Optional, Protocol
 from bs4 import BeautifulSoup
 
 from .models import RecipeCandidate
-from .storage import StorageManager
 
 logger = logging.getLogger("dredger")
 
 
+class ResponseLike(Protocol):
+    status_code: int
+    url: str
+    text: str
+    content: bytes
+
+    def close(self) -> None: ...
+
+
+class SessionLike(Protocol):
+    def get(self, url: str, timeout: int = 10, **kwargs: Any) -> ResponseLike: ...
+
+    def head(
+        self,
+        url: str,
+        timeout: int = 5,
+        allow_redirects: bool = True,
+        **kwargs: Any,
+    ) -> ResponseLike: ...
+
+
+class StorageLike(Protocol):
+    def get_cached_sitemap(self, site_url: str, /) -> Optional[dict[str, Any]]: ...
+
+    def cache_sitemap(self, site_url: str, sitemap_url: str, urls: List[str], /) -> None: ...
+
+
 class SitemapCrawler:
-    def __init__(self, session: requests.Session, storage: StorageManager):
+    def __init__(self, session: SessionLike, storage: StorageLike):
         self.session = session
         self.storage = storage
 

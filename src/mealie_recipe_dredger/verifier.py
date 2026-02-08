@@ -1,3 +1,4 @@
+import re
 from typing import Optional, Tuple
 from urllib.parse import urlparse
 
@@ -11,6 +12,8 @@ from .config import (
     NON_RECIPE_PATH_HINTS,
     TRANSIENT_HTTP_CODES,
 )
+
+RECIPE_CLASS_PATTERN = re.compile(r"(wp-recipe-maker|tasty-recipes|mv-create-card|recipe-card)")
 
 
 class RecipeVerifier:
@@ -76,13 +79,7 @@ class RecipeVerifier:
 
             if not is_recipe:
                 soup = BeautifulSoup(response.content, "lxml")
-                if soup.find(
-                    class_=lambda x: x
-                    and any(
-                        cls in x
-                        for cls in ["wp-recipe-maker", "tasty-recipes", "mv-create-card", "recipe-card"]
-                    )
-                ):
+                if soup.find(class_=RECIPE_CLASS_PATTERN):
                     is_recipe = True
 
             if not is_recipe:

@@ -27,7 +27,7 @@ class ImportManager:
     ):
         self.session = session
         self.import_session = requests.Session()
-        self.import_session.headers.update(self.session.headers.copy())
+        self.import_session.headers.update(dict(self.session.headers))
         # Import requests should not be retried by urllib3 adapters; timeout
         # handling is managed explicitly by this class and retry_queue logic.
         self.import_session.mount("http://", HTTPAdapter(max_retries=0))

@@ -6,7 +6,7 @@ import logging
 import os
 import random
 import sys
-from typing import Any, List
+from typing import TYPE_CHECKING, Any, List, Optional
 
 from .config import (
     DEFAULT_DEPTH,
@@ -19,6 +19,9 @@ from .config import (
     __version__,
 )
 from .logging_utils import configure_logging
+
+if TYPE_CHECKING:
+    from .storage import StorageManager
 
 try:
     from tqdm import tqdm
@@ -114,7 +117,7 @@ def _parse_sites_json(data) -> List[str]:
     return []
 
 
-def load_sites_from_source(source_path: str = None) -> List[str]:
+def load_sites_from_source(source_path: Optional[str] = None) -> List[str]:
     """Load sites with priority: CLI > env override > local file > defaults."""
 
     if source_path:
