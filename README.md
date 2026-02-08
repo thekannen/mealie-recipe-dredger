@@ -46,7 +46,7 @@ Credit to the original author for creating the project and curated site list fou
 1. Clone your fork and enter it:
 
 ```bash
-git clone https://github.com/<your-user>/mealie-recipe-dredger.git
+git clone https://github.com/thekannen/mealie-recipe-dredger.git
 cd mealie-recipe-dredger
 ```
 
