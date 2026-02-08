@@ -1,6 +1,6 @@
 """
 Recipe Dredger - Enhanced Public Edition
-Intelligent recipe scraper for Mealie/Tandoor with optimized performance and reliability.
+Intelligent recipe scraper for Mealie with optimized performance and reliability.
 Usage: python3 dredger.py [--dry-run] [--limit 10] [--sites my_sites.json] [--no-cache] [--version]
 """
 
@@ -8,7 +8,6 @@ import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 from bs4 import BeautifulSoup
-from langdetect import detect, DetectorFactory
 import json
 import time
 import os
@@ -25,7 +24,7 @@ from dataclasses import dataclass, asdict
 from datetime import datetime, timedelta
 
 # --- CONSTANTS ---
-VERSION = "1.0.0-beta.10"
+VERSION = "1.0.0-beta.11"
 
 # --- OPTIONAL VISUALS ---
 try:
@@ -59,10 +58,7 @@ DRY_RUN = os.getenv('DRY_RUN', 'true').lower() == 'true'
 MEALIE_ENABLED = os.getenv('MEALIE_ENABLED', 'true').lower() == 'true'
 MEALIE_URL = os.getenv('MEALIE_URL', 'http://localhost:9000').rstrip('/')
 MEALIE_API_TOKEN = os.getenv('MEALIE_API_TOKEN', 'your-token')
-
-TANDOOR_ENABLED = os.getenv('TANDOOR_ENABLED', 'false').lower() == 'true'
-TANDOOR_URL = os.getenv('TANDOOR_URL', 'http://localhost:8080').rstrip('/')
-TANDOOR_API_KEY = os.getenv('TANDOOR_API_KEY', 'your-key')
+MEALIE_IMPORT_TIMEOUT = int(os.getenv('MEALIE_IMPORT_TIMEOUT', 20))
 
 # Rate limiting
 DEFAULT_CRAWL_DELAY = float(os.getenv('CRAWL_DELAY', 2.0))
@@ -76,8 +72,16 @@ RETRY_FILE = "data/retry_queue.json"
 STATS_FILE = "data/stats.json"
 SITEMAP_CACHE_FILE = "data/sitemap_cache.json"
 CACHE_EXPIRY_DAYS = int(os.getenv('CACHE_EXPIRY_DAYS', 7))
+MAX_RETRY_ATTEMPTS = int(os.getenv('MAX_RETRY_ATTEMPTS', 3))
 
-DetectorFactory.seed = 0
+TRANSIENT_HTTP_CODES = {408, 425, 429, 500, 502, 503, 504, 520, 521, 522, 523, 524}
+NON_RECIPE_EXTENSIONS = (
+    '.jpg', '.jpeg', '.png', '.gif', '.webp', '.svg', '.bmp', '.ico',
+    '.pdf', '.zip', '.mp4', '.webm', '.mov', '.avi', '.mkv'
+)
+NON_RECIPE_PATH_HINTS = (
+    '/wp-content/uploads/', '/wp-json/', '/category/', '/tag/', '/author/', '/feed/'
+)
 
 # --- THE FULL CURATED LIST ---
 DEFAULT_SITES = [
@@ -214,22 +218,37 @@ class StorageManager:
     
     def add_imported(self, url: str):
         self.imported.add(url)
+        if url in self.retry_queue:
+            self.retry_queue.pop(url, None)
         self._changes_since_flush += 1
         self._auto_flush()
     
     def add_reject(self, url: str):
         self.rejects.add(url)
+        if url in self.retry_queue:
+            self.retry_queue.pop(url, None)
         self._changes_since_flush += 1
         self._auto_flush()
     
-    def add_retry(self, url: str, reason: str):
+    def add_retry(self, url: str, reason: str, increment: bool = False):
+        existing = self.retry_queue.get(url, {})
+        attempts = int(existing.get('attempts', 0))
+        if increment:
+            attempts += 1
+
         self.retry_queue[url] = {
             'reason': reason,
-            'attempts': 0,
+            'attempts': attempts,
             'last_attempt': datetime.now().isoformat()
         }
         self._changes_since_flush += 1
         self._auto_flush()
+
+    def remove_retry(self, url: str):
+        if url in self.retry_queue:
+            self.retry_queue.pop(url, None)
+            self._changes_since_flush += 1
+            self._auto_flush()
     
     def update_stats(self, site_url: str, stats: SiteStats):
         self.stats[site_url] = stats.to_dict()
@@ -344,7 +363,7 @@ def get_session() -> requests.Session:
         total=3, 
         backoff_factor=1, 
         status_forcelist=[500, 502, 503, 504, 429],
-        allowed_methods=["HEAD", "GET", "POST"]
+        allowed_methods=["HEAD", "GET"]
     )
     session.mount('http://', HTTPAdapter(max_retries=retries))
     session.mount('https://', HTTPAdapter(max_retries=retries))
@@ -415,7 +434,12 @@ class SitemapCrawler:
 
             # Handle Index Sitemaps (nested)
             if soup.find('sitemap'):
-                sub_maps = [loc.text for loc in soup.find_all('loc')]
+                sub_maps = []
+                for sitemap_tag in soup.find_all('sitemap'):
+                    loc_tag = sitemap_tag.find('loc', recursive=False)
+                    if loc_tag and loc_tag.text:
+                        sub_maps.append(loc_tag.text.strip())
+
                 targets = [s for s in sub_maps if 'post' in s or 'recipe' in s]
                 if not targets: 
                     targets = sub_maps
@@ -426,7 +450,15 @@ class SitemapCrawler:
             
             # Handle URL Sitemaps
             if soup.find('url'):
-                 return [loc.text for loc in soup.find_all('loc')]
+                 urls = []
+                 for url_tag in soup.find_all('url'):
+                     loc_tag = url_tag.find('loc', recursive=False)
+                     if not loc_tag or not loc_tag.text:
+                         continue
+                     loc = loc_tag.text.strip()
+                     if loc.startswith('http://') or loc.startswith('https://'):
+                         urls.append(loc)
+                 return urls
             
             return []
 
@@ -455,6 +487,24 @@ class SitemapCrawler:
 class RecipeVerifier:
     def __init__(self, session: requests.Session):
         self.session = session
+
+    def pre_filter_candidate(self, url: str) -> Optional[str]:
+        try:
+            parsed = urlparse(url)
+            path = parsed.path.lower()
+
+            if path.endswith(NON_RECIPE_EXTENSIONS):
+                return "Non-HTML media URL"
+
+            if any(marker in path for marker in NON_RECIPE_PATH_HINTS):
+                return "Non-recipe path"
+
+            if path in ('/blog', '/blog/'):
+                return "Blog index path"
+        except Exception:
+            pass
+
+        return None
     
     def is_paranoid_skip(self, url: str, soup: Optional[BeautifulSoup] = None) -> Optional[str]:
         try:
@@ -478,11 +528,16 @@ class RecipeVerifier:
         
         return None
     
-    def verify_recipe(self, url: str) -> Tuple[bool, Optional[BeautifulSoup], Optional[str]]:
+    def verify_recipe(self, url: str) -> Tuple[bool, Optional[BeautifulSoup], Optional[str], bool]:
+        pre_filtered_reason = self.pre_filter_candidate(url)
+        if pre_filtered_reason:
+            return False, None, pre_filtered_reason, False
+
         try:
             r = self.session.get(url, timeout=10)
-            if r.status_code != 200: 
-                return False, None, f"HTTP {r.status_code}"
+            if r.status_code != 200:
+                is_transient = r.status_code in TRANSIENT_HTTP_CODES
+                return False, None, f"HTTP {r.status_code}", is_transient
             
             # Recipe detection
             is_recipe = False
@@ -496,8 +551,8 @@ class RecipeVerifier:
                 if soup.find(class_=lambda x: x and any(cls in x for cls in ['wp-recipe-maker', 'tasty-recipes', 'mv-create-card', 'recipe-card'])):
                     is_recipe = True
             
-            if not is_recipe: 
-                return False, soup, "No recipe detected"
+            if not is_recipe:
+                return False, soup, "No recipe detected", False
             
             if soup is None: 
                 soup = BeautifulSoup(r.content, 'lxml')
@@ -505,12 +560,18 @@ class RecipeVerifier:
             # Paranoid checks
             skip_reason = self.is_paranoid_skip(url, soup)
             if skip_reason: 
-                return False, soup, skip_reason
+                return False, soup, skip_reason, False
             
-            return True, soup, None
+            return True, soup, None, False
         
+        except requests.exceptions.Timeout as e:
+            return False, None, f"Timeout: {str(e)}", True
+        except requests.exceptions.ConnectionError as e:
+            return False, None, f"Connection error: {str(e)}", True
+        except requests.exceptions.RequestException as e:
+            return False, None, f"Request error: {str(e)}", True
         except Exception as e:
-            return False, None, f"Exception: {str(e)}"
+            return False, None, f"Exception: {str(e)}", False
 
 # ============================================================================
 # IMPORT MANAGER
@@ -519,6 +580,9 @@ class RecipeVerifier:
 class ImportManager:
     def __init__(self, session: requests.Session, storage: StorageManager, rate_limiter: RateLimiter, dry_run: bool):
         self.session = session
+        # Keep import POST behavior explicit: no adapter-level retries on Mealie writes.
+        self.import_session = requests.Session()
+        self.import_session.headers.update(self.session.headers.copy())
         self.storage = storage
         self.rate_limiter = rate_limiter
         self.dry_run = dry_run
@@ -528,10 +592,10 @@ class ImportManager:
         ]
         self._mealie_import_path: Optional[str] = None
     
-    def import_to_mealie(self, url: str) -> Tuple[bool, Optional[str]]:
+    def import_to_mealie(self, url: str) -> Tuple[bool, Optional[str], bool]:
         if self.dry_run:
             logger.info(f"   [DRY RUN] Would import to Mealie: {url}")
-            return True, None
+            return True, None, False
         
         headers = {"Authorization": f"Bearer {MEALIE_API_TOKEN}"}
         try:
@@ -543,11 +607,11 @@ class ImportManager:
 
             endpoint_error = None
             for path in candidate_paths:
-                r = self.session.post(
+                r = self.import_session.post(
                     f"{MEALIE_URL}{path}",
                     headers=headers,
                     json={"url": url},
-                    timeout=20
+                    timeout=MEALIE_IMPORT_TIMEOUT
                 )
 
                 if r.status_code in [200, 201, 202]:
@@ -555,65 +619,43 @@ class ImportManager:
                         self._mealie_import_path = path
                         logger.info(f"   [Mealie] Using import endpoint: {path}")
                     logger.info(f"   ✅ [Mealie] Imported: {url}")
-                    return True, None
+                    return True, None, False
 
                 if r.status_code == 409:
                     if self._mealie_import_path != path:
                         self._mealie_import_path = path
                         logger.info(f"   [Mealie] Using import endpoint: {path}")
                     logger.info(f"   ⚠️ [Mealie] Duplicate: {url}")
-                    return True, None
+                    return True, None, False
 
                 if r.status_code in [404, 405]:
                     endpoint_error = f"HTTP {r.status_code}"
                     continue
 
+                if r.status_code in TRANSIENT_HTTP_CODES:
+                    return False, f"HTTP {r.status_code}", True
+
                 body = r.text.strip().replace("\n", " ")
                 if len(body) > 180:
                     body = f"{body[:177]}..."
-                return False, f"HTTP {r.status_code}" + (f" - {body}" if body else "")
+                return False, f"HTTP {r.status_code}" + (f" - {body}" if body else ""), False
 
-            return False, endpoint_error or "No compatible Mealie import endpoint found"
+            return False, endpoint_error or "No compatible Mealie import endpoint found", False
         
+        except requests.exceptions.Timeout as e:
+            return False, f"Timeout: {str(e)}", True
+        except requests.exceptions.ConnectionError as e:
+            return False, f"Connection error: {str(e)}", True
+        except requests.exceptions.RequestException as e:
+            return False, f"Request error: {str(e)}", True
         except Exception as e:
-            return False, str(e)
-
-    def import_to_tandoor(self, url: str) -> Tuple[bool, Optional[str]]:
-        if self.dry_run:
-            logger.info(f"   [DRY RUN] Would import to Tandoor: {url}")
-            return True, None
-        
-        headers = {"Authorization": f"Bearer {TANDOOR_API_KEY}"}
-        try:
-            self.rate_limiter.wait_if_needed(TANDOOR_URL)
-            r = self.session.post(
-                f"{TANDOOR_URL}/api/recipe/import-url/", 
-                headers=headers, 
-                json={"url": url}, 
-                timeout=20
-            )
-            
-            if r.status_code in [200, 201]:
-                logger.info(f"   ✅ [Tandoor] Imported: {url}")
-                return True, None
-            else:
-                return False, f"HTTP {r.status_code}"
-        
-        except Exception as e:
-            return False, str(e)
+            return False, str(e), False
     
-    def import_recipe(self, url: str) -> bool:
-        success = False
-        
-        if MEALIE_ENABLED:
-            m_ok, _ = self.import_to_mealie(url)
-            success = success or m_ok
-        
-        if TANDOOR_ENABLED:
-            t_ok, _ = self.import_to_tandoor(url)
-            success = success or t_ok
-            
-        return success
+    def import_recipe(self, url: str) -> Tuple[bool, Optional[str], bool]:
+        if not MEALIE_ENABLED:
+            return False, "Mealie import is disabled", False
+
+        return self.import_to_mealie(url)
 
 # ============================================================================
 # CLI & MAIN
@@ -623,14 +665,11 @@ def validate_config():
     """Check for common misconfigurations."""
     issues = []
     
-    if not MEALIE_ENABLED and not TANDOOR_ENABLED and not DRY_RUN:
-        issues.append("⚠️  Warning: Both Mealie and Tandoor are disabled. Nothing will be imported!")
+    if not MEALIE_ENABLED and not DRY_RUN:
+        issues.append("⚠️  Warning: Mealie is disabled. Nothing will be imported!")
     
     if MEALIE_ENABLED and MEALIE_API_TOKEN == 'your-token':
         issues.append("⚠️  Warning: MEALIE_API_TOKEN not configured (still set to default)")
-        
-    if TANDOOR_ENABLED and TANDOOR_API_KEY == 'your-key':
-        issues.append("⚠️  Warning: TANDOOR_API_KEY not configured (still set to default)")
         
     for issue in issues:
         logger.warning(issue)
@@ -644,8 +683,56 @@ def print_summary(storage: StorageManager):
     logger.info(f"   Cached Sitemaps: {len(storage.sitemap_cache)}")
     logger.info("=" * 50)
 
+def process_retry_queue(
+    storage: StorageManager,
+    verifier: "RecipeVerifier",
+    importer: "ImportManager",
+    rate_limiter: RateLimiter
+):
+    if not storage.retry_queue:
+        return
+
+    pending = list(storage.retry_queue.items())
+    logger.info(f"🔁 Processing Retry Queue: {len(pending)} URL(s)")
+
+    for url, meta in pending:
+        attempts = int(meta.get('attempts', 0))
+        if attempts >= MAX_RETRY_ATTEMPTS:
+            logger.warning(f"   ❌ Giving up after {attempts} attempts: {url}")
+            storage.remove_retry(url)
+            storage.add_reject(url)
+            continue
+
+        rate_limiter.wait_if_needed(url)
+        is_recipe, _, verify_error, verify_transient = verifier.verify_recipe(url)
+
+        if not is_recipe:
+            if verify_transient:
+                storage.add_retry(url, verify_error or "Transient verification failure", increment=True)
+                logger.warning(
+                    f"   ↻ Retry queued ({storage.retry_queue[url]['attempts']}/{MAX_RETRY_ATTEMPTS}) [verify]: {url}"
+                )
+            else:
+                storage.remove_retry(url)
+                storage.add_reject(url)
+            continue
+
+        imported, import_error, import_transient = importer.import_recipe(url)
+        if imported:
+            storage.add_imported(url)
+            continue
+
+        if import_transient:
+            storage.add_retry(url, import_error or "Transient import failure", increment=True)
+            logger.warning(
+                f"   ↻ Retry queued ({storage.retry_queue[url]['attempts']}/{MAX_RETRY_ATTEMPTS}) [import]: {url}"
+            )
+        else:
+            storage.remove_retry(url)
+            storage.add_reject(url)
+
 def load_sites_from_source(source_path: str = None) -> List[str]:
-    """Load sites from various sources with priority: CLI > local file > env > defaults"""
+    """Load sites from various sources with priority: CLI > env > local file > defaults"""
     
     def parse_sites_json(data) -> List[str]:
         """Parse sites from JSON, handling both array and object formats."""
@@ -674,7 +761,24 @@ def load_sites_from_source(source_path: str = None) -> List[str]:
             logger.error(f"File not found: {source_path}")
             sys.exit(1)
 
-    # 2. Local sites.json
+    # 2. Environment variable (override)
+    if os.getenv('SITES'):
+        sites_env = os.getenv('SITES').strip()
+
+        # File path support (absolute or relative)
+        if os.path.exists(sites_env):
+            try:
+                with open(sites_env, 'r') as f:
+                    data = json.load(f)
+                    return parse_sites_json(data)
+            except Exception as e:
+                logger.error(f"Failed to load sites file from SITES={sites_env}: {e}")
+                sys.exit(1)
+
+        # Comma-separated URLs
+        return [s.strip() for s in sites_env.split(',') if s.strip().startswith('http')]
+
+    # 3. Local sites.json
     if os.path.exists('sites.json'):
         try:
             with open('sites.json', 'r') as f: 
@@ -683,10 +787,6 @@ def load_sites_from_source(source_path: str = None) -> List[str]:
         except Exception as e:
             logger.warning(f"Failed to load sites.json: {e}")
             pass
-
-    # 3. Environment variable
-    if os.getenv('SITES'):
-        return [s.strip() for s in os.getenv('SITES').split(',') if s.strip()]
 
     # 4. Defaults (The Full Curated List)
     return DEFAULT_SITES
@@ -724,6 +824,9 @@ def main():
     crawler = SitemapCrawler(session, storage)
     verifier = RecipeVerifier(session)
     importer = ImportManager(session, storage, rate_limiter, DRY_RUN_MODE)
+
+    # Process retry queue first so transient failures get another chance quickly.
+    process_retry_queue(storage, verifier, importer, rate_limiter)
     
     # Process sites
     random.shuffle(sites_list)
@@ -761,27 +864,46 @@ def main():
             
             url = candidate.url
             
-            if url in storage.imported or url in storage.rejects: 
+            if url in storage.imported or url in storage.rejects or url in storage.retry_queue:
                 continue
             
             rate_limiter.wait_if_needed(url)
             
-            is_recipe, soup, error = verifier.verify_recipe(url)
+            is_recipe, _, error, is_transient = verifier.verify_recipe(url)
             
             if is_recipe:
-                if importer.import_recipe(url):
+                imported, import_error, import_transient = importer.import_recipe(url)
+
+                if imported:
                     storage.add_imported(url)
                     imported_count += 1
                     site_stats['imported'] += 1
                 else:
                     site_stats['errors'] += 1
-                    if not TQDM_AVAILABLE: 
-                        logger.error(f"   ❌ Import failed: {url}")
+                    if import_transient:
+                        storage.add_retry(url, import_error or "Transient import failure", increment=True)
+                        if not TQDM_AVAILABLE:
+                            logger.warning(
+                                f"   ↻ Transient import failure queued for retry "
+                                f"({storage.retry_queue[url]['attempts']}/{MAX_RETRY_ATTEMPTS}): {url}"
+                            )
+                    else:
+                        storage.add_reject(url)
+                        if not TQDM_AVAILABLE:
+                            logger.error(f"   ❌ Import failed ({import_error}): {url}")
             else:
-                if not TQDM_AVAILABLE: 
-                    logger.debug(f"   Skipping ({error}): {url}")
-                storage.add_reject(url)
-                site_stats['rejected'] += 1
+                if is_transient:
+                    storage.add_retry(url, error or "Transient verification failure", increment=True)
+                    if not TQDM_AVAILABLE:
+                        logger.warning(
+                            f"   ↻ Transient verification failure queued for retry "
+                            f"({storage.retry_queue[url]['attempts']}/{MAX_RETRY_ATTEMPTS}): {url}"
+                        )
+                else:
+                    if not TQDM_AVAILABLE:
+                        logger.debug(f"   Skipping ({error}): {url}")
+                    storage.add_reject(url)
+                    site_stats['rejected'] += 1
         
         if not TQDM_AVAILABLE:
             logger.info(f"   Site Results: {site_stats['imported']} imported, "

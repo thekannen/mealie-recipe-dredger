@@ -1,6 +1,19 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [1.0.0-beta.11] - 2026-02-08
+
+### Fixed
+- **Transient Failure Handling:** Timeouts, connection errors, and transient HTTP responses now enter `retry_queue.json` instead of being permanently rejected.
+- **Sitemap URL Quality:** XML parsing now only reads direct `<url><loc>` entries, preventing `<image:loc>` media URLs from being treated as recipe candidates.
+- **Mealie Timeout Behavior:** Request retries for `POST` imports were removed at the HTTP adapter level to prevent repeated long timeout cycles against Mealie import endpoints.
+
+### Changed
+- **Mealie-Only Scope:** Removed Tandoor import support from the dredger and cleaner workflows.
+- **Runtime Site Editability Restored:** Docker Compose now mounts `./sites.json:/app/sites.json:ro` again for live host-side edits without image rebuilds.
+- **Deploy Workflow:** Docker Compose now uses local repo build context (`context: .`) to match `mealie-organizer` style update flows.
+- **Versioning:** Runtime version string updated to `1.0.0-beta.11`.
+
 ## [1.0.0-beta.10] - 2026-02-08
 
 ### Fixed

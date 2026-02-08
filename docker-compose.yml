@@ -1,8 +1,8 @@
 services:
   mealie-recipe-dredger:
     build:
-      context: ${DREDGER_BUILD_CONTEXT:-.}
-    image: mealie-recipe-dredger:local
+      context: .
+    image: mealie-recipe-dredger:latest
     container_name: mealie-recipe-dredger
     
     # All secrets and configuration loaded from .env file
@@ -11,6 +11,7 @@ services:
     
     volumes:
       - ./data:/app/data                    # Persistent data (imported.json, rejects.json, etc.)
+      - ./sites.json:/app/sites.json:ro     # Runtime-editable site list
     
     restart: "no"
     
@@ -18,8 +19,8 @@ services:
   # Run manually with: docker compose run --rm mealie-cleaner
   mealie-cleaner:
     build:
-      context: ${DREDGER_BUILD_CONTEXT:-.}
-    image: mealie-recipe-dredger:local
+      context: .
+    image: mealie-recipe-dredger:latest
     container_name: mealie-cleaner
     command: python maintenance/master_cleaner.py
     profiles: ["maintenance"]

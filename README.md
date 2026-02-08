@@ -1,8 +1,6 @@
-# 🍲 Recipe Dredger (Mealie & Tandoor)
+# 🍲 Recipe Dredger (Mealie)
 
-A bulk-import automation tool to populate your self-hosted recipe managers with high-quality recipes.
-
-> **⚠️ Note regarding Tandoor:** This script was built and tested specifically for **Mealie**. Tandoor support was added via community request and is currently **untested** by the author. If you use Tandoor, please report your results in the Issues tab!
+A bulk-import automation tool to populate your self-hosted Mealie instance with high-quality recipes.
 
 ![Release](https://img.shields.io/github/v/release/D0rk4ce/mealie-recipe-dredger?include_prereleases&style=flat-square)
 
@@ -10,7 +8,7 @@ This script automates the process of finding **new** recipes. It scans a curated
 
 ## 🚀 Features
 
-* **Multi-Platform:** Supports importing to **Mealie** (Primary) and **Tandoor** (Experimental).
+* **Mealie-Focused:** Imports directly into Mealie with endpoint compatibility for current and legacy API paths.
 * **Secure Configuration:** Secrets managed via `.env` file (never committed to git).
 * **Editable Site List:** 100+ curated food blogs in `sites.json` - easily add/remove sites without editing code.
 * **Smart Memory:** Uses local JSON files to remember rejected and successfully imported URLs.
@@ -23,36 +21,19 @@ This script automates the process of finding **new** recipes. It scans a curated
 * **Per-Site Statistics:** Tracks imported/rejected/error counts for each site processed.
 * **Progress Visualization:** Optional tqdm progress bars for long-running operations.
 
-## 📊 What's New in v1.0-beta.9
+## 📊 What's New in v1.0.0-beta.11
 
-### Configuration & Security Improvements
-- **`.env` file support** for secure secrets management (no more tokens in docker-compose.yml!)
-- **`sites.json` external site list** - edit 100+ curated food blogs without touching code
-- **SETUP_GUIDE.md** added for first-time users (5-minute setup)
-- **Security:** `.gitignore` protects your `.env` file from accidental commits
+### Reliability & Import Flow
+- **Transient failures now retry:** Timeouts, 429s, and 5xx responses are queued in `retry_queue.json` instead of being permanently rejected.
+- **Mealie POST timeout behavior improved:** HTTP adapter retries no longer retry `POST` import calls, preventing long repeated timeout loops.
+- **Mealie endpoint compatibility:** Automatically uses `/api/recipes/create/url` (current) with fallback to `/api/recipes/create-url` (legacy).
 
-### Performance Improvements
-- **50% fewer HTTP requests** through intelligent HEAD checks and sitemap caching
-- **40% faster processing** via single-pass HTML parsing and JSON-LD fast paths
-- **Robust XML parsing** using BeautifulSoup instead of fragile regex patterns
+### Crawl Quality & Performance
+- **Sitemap parsing fixed:** Only primary `<url><loc>` entries are consumed, which avoids crawling `<image:loc>` media links.
+- **Runtime-editable site list:** `sites.json` is mounted from host (`./sites.json:/app/sites.json:ro`) so you can edit targets without rebuilding.
 
-### Reliability Enhancements
-- **Graceful shutdown handling** for Docker containers (SIGTERM/SIGINT support)
-- **Configuration validation** warns about missing API tokens before starting
-- **Rate limit jitter** (0.5x-1.5x variance) mimics human browsing patterns
-- **Session summary** displays total imported/rejected/cached counts at completion
-
-### New Features
-- **`--version` flag** to check current version
-- **`--no-cache` flag** to force fresh sitemap crawls
-- **Per-site statistics** show results after each site is processed
-- **Multi-architecture Docker images** with ARM64 support (Raspberry Pi compatible)
-
-### Developer Experience
-- **Type hints throughout** for better IDE support
-- **Dataclasses** for structured data management
-- **Enhanced logging** with startup banner and progress indicators
-- **Comprehensive error handling** with detailed failure reasons
+### Deployment Workflow
+- **Local repo deployment pattern:** Compose now builds from local repo context (`context: .`) and includes `scripts/docker/update.sh` to match `mealie-organizer` update/redeploy flow.
 
 ## 🐳 Quick Start (Docker)
 
@@ -60,12 +41,10 @@ The most efficient way to run the Dredger is using Docker with a `.env` file for
 
 ### First-Time Setup
 
-1. **Download the required files:**
+1. **Clone your fork to the Docker host:**
    ```bash
-   # Get docker-compose.yml, .env.example, and sites.json
-   wget https://raw.githubusercontent.com/D0rk4ce/mealie-recipe-dredger/main/docker-compose.yml
-   wget https://raw.githubusercontent.com/D0rk4ce/mealie-recipe-dredger/main/.env.example
-   wget https://raw.githubusercontent.com/D0rk4ce/mealie-recipe-dredger/main/sites.json
+   git clone https://github.com/<your-user>/mealie-recipe-dredger.git
+   cd mealie-recipe-dredger
    ```
 
 2. **Configure your secrets:**
@@ -84,18 +63,15 @@ The most efficient way to run the Dredger is using Docker with a `.env` file for
    DRY_RUN=false                                 # Set to false to import
    ```
 
-4. **(Optional) Customize `sites.json`:**
+4. **(Optional) Customize `sites.json` on host:**
    - Edit to add/remove food blogs
    - Default includes 100+ curated sites
    - Organized by cuisine (Asian, Latin American, etc.)
 
-5. **Run the dredger:**
+5. **Deploy or update using helper script (organizer-style):**
    ```bash
-   # Test run (dry mode - won't import anything)
-   docker compose up
-   
-   # Check the output, then set DRY_RUN=false in .env for live import
-   docker compose up
+   ./scripts/docker/update.sh --branch main --service mealie-recipe-dredger
+   docker compose logs -f mealie-recipe-dredger
    ```
 
 ### Your Directory Structure
@@ -134,22 +110,20 @@ CACHE_EXPIRY_DAYS=7
 
 **Security Note:** Never commit `.env` to git! It contains your API tokens. The `.env.example` file is safe to commit.
 
-### Command-Line Options (New in beta.9)
+### Command-Line Options
 
 ```bash
 # Check version
-docker run --rm ghcr.io/d0rk4ce/mealie-recipe-dredger:latest python dredger.py --version
+docker compose run --rm mealie-recipe-dredger python dredger.py --version
 
 # Dry run with custom limits
-docker run --rm ghcr.io/d0rk4ce/mealie-recipe-dredger:latest python dredger.py --dry-run --limit 10
+docker compose run --rm mealie-recipe-dredger python dredger.py --dry-run --limit 10
 
 # Force fresh sitemap crawl (ignore cache)
-docker run --rm ghcr.io/d0rk4ce/mealie-recipe-dredger:latest python dredger.py --no-cache
+docker compose run --rm mealie-recipe-dredger python dredger.py --no-cache
 
 # Use custom site list
-docker run --rm -v $(pwd)/my_sites.json:/app/my_sites.json \
-  ghcr.io/d0rk4ce/mealie-recipe-dredger:latest \
-  python dredger.py --sites /app/my_sites.json
+docker compose run --rm mealie-recipe-dredger python dredger.py --sites /app/sites.json
 ```
 
 ### Scheduling (Cron)
@@ -158,6 +132,28 @@ To run this weekly (e.g., Sundays at 3am), add an entry to your host's crontab:
 
 ```bash
 0 3 * * 0 cd /path/to/docker-compose-folder && docker compose up
+```
+
+## 🔄 Update and Redeploy
+
+Use the helper script:
+
+```bash
+./scripts/docker/update.sh
+```
+
+Useful options:
+- `--skip-git-pull`
+- `--no-build`
+- `--branch <name>`
+- `--service <name>`
+- `--prune`
+
+Manual equivalent:
+
+```bash
+git pull --ff-only origin main
+docker compose up -d --build --remove-orphans mealie-recipe-dredger
 ```
 
 ## 🧹 Maintenance Mode (Cleaner)
@@ -184,9 +180,7 @@ All configuration is managed via the `.env` file (copy from `.env.example`).
 | `MEALIE_ENABLED` | `true` | Set to `false` to disable Mealie imports. |
 | `MEALIE_URL` | N/A | Your local Mealie URL (e.g. `http://192.168.1.5:9000`). |
 | `MEALIE_API_TOKEN` | N/A | Found in Mealie User Settings > Manage API Tokens. |
-| `TANDOOR_ENABLED` | `false` | Set to `true` to enable Tandoor imports. |
-| `TANDOOR_URL` | N/A | Your local Tandoor URL. |
-| `TANDOOR_API_KEY` | N/A | Your Tandoor API key. |
+| `MEALIE_IMPORT_TIMEOUT` | `20` | Seconds to wait for Mealie import endpoint response before retry-queueing. |
 
 ### Scraper Behavior
 
@@ -197,13 +191,14 @@ All configuration is managed via the `.env` file (copy from `.env.example`).
 | `TARGET_RECIPES_PER_SITE` | `50` | Stops scanning a specific site after importing this many recipes. |
 | `SCAN_DEPTH` | `1000` | Maximum number of sitemap links to check per site before giving up. |
 
-### Performance & Rate Limiting (New in beta.9)
+### Performance & Rate Limiting
 
 | Variable | Default | Description |
 | :--- | :--- | :--- |
 | `CRAWL_DELAY` | `2.0` | Seconds to wait between requests to the same domain. |
 | `RESPECT_ROBOTS_TXT` | `true` | Honor robots.txt crawl-delay directives. |
 | `CACHE_EXPIRY_DAYS` | `7` | Days before sitemap cache expires. |
+| `MAX_RETRY_ATTEMPTS` | `3` | Max retry-queue attempts for transient failures before final rejection. |
 
 ### Site Sources
 
@@ -323,13 +318,13 @@ If you prefer to run the script manually without Docker:
 - Check your `data/sitemap_cache.json` is being used (look for cache hits in logs with `LOG_LEVEL=DEBUG`)
 
 ### Issue: "Container stops unexpectedly"
-**Solution:** v1.0-beta.9 includes graceful shutdown handling. Check logs for `🛑 Received signal` messages. Your data is automatically saved before exit.
+**Solution:** v1.0.0-beta.11 includes graceful shutdown and persistent retry queue handling. Check logs for `🛑 Received signal` or `🔁 Processing Retry Queue` messages.
 
 ## 📊 Understanding the Output
 
 ### Startup Banner
 ```
-🍲 Recipe Dredger Started (v1.0-beta.9)
+🍲 Recipe Dredger Started (1.0.0-beta.11)
    Mode: DRY RUN
    Targets: 95 sites
    Limit: 50 per site
@@ -398,8 +393,7 @@ Distributed under the MIT License. See `LICENSE` for more information.
 
 5. **Run:**
    ```bash
-   docker compose pull
-   docker compose up
+   docker compose up -d --build --remove-orphans mealie-recipe-dredger
    ```
 
 **Old configuration still works** but is not recommended (secrets in docker-compose.yml is a security risk).

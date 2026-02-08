@@ -25,10 +25,6 @@ MEALIE_ENABLED = os.getenv('MEALIE_ENABLED', 'true').lower() == 'true'
 MEALIE_URL = os.getenv('MEALIE_URL', 'http://localhost:9000').rstrip('/')
 MEALIE_API_TOKEN = os.getenv('MEALIE_API_TOKEN', 'your-token')
 
-TANDOOR_ENABLED = os.getenv('TANDOOR_ENABLED', 'false').lower() == 'true'
-TANDOOR_URL = os.getenv('TANDOOR_URL', 'http://localhost:8080').rstrip('/')
-TANDOOR_API_KEY = os.getenv('TANDOOR_API_KEY', 'your-key')
-
 MAX_WORKERS = int(os.getenv('MAX_WORKERS', 2))
 REJECT_FILE = "data/rejects.json"
 VERIFIED_FILE = "data/verified.json"
@@ -101,42 +97,6 @@ def delete_mealie_recipe(slug, name, reason, url=None):
     if url: REJECTS.add(url)
     if slug in VERIFIED: VERIFIED.remove(slug)
 
-def get_tandoor_recipes():
-    if not TANDOOR_ENABLED: return []
-    headers = {"Authorization": f"Bearer {TANDOOR_API_KEY}"}
-    recipes, page = [], 1
-    logger.info(f"Scanning Tandoor library at {TANDOOR_URL}...")
-    while True:
-        try:
-            r = requests.get(f"{TANDOOR_URL}/api/recipe/?page={page}&limit=100", headers=headers, timeout=10)
-            if r.status_code != 200: break
-            data = r.json()
-            results = data.get("results", [])
-            if not results: break
-            recipes.extend(results)
-            if not data.get("next"): break
-            page += 1
-        except Exception as e:
-            logger.error(f"Error fetching Tandoor recipes: {e}")
-            break
-    logger.info(f"Total Tandoor recipes found: {len(recipes)}")
-    return recipes
-
-def delete_tandoor_recipe(recipe_id, name, reason, url=None):
-    if DRY_RUN:
-        logger.info(f" [DRY RUN] Would delete from Tandoor: '{name}' (Reason: {reason})")
-        return
-
-    headers = {"Authorization": f"Bearer {TANDOOR_API_KEY}"}
-    logger.info(f"🗑️ Deleting from Tandoor: '{name}' (Reason: {reason})")
-    try:
-        requests.delete(f"{TANDOOR_URL}/api/recipe/{recipe_id}/", headers=headers, timeout=10)
-        time.sleep(0.5)
-    except Exception as e:
-        logger.error(f"Error deleting {recipe_id}: {e}")
-
-    if url: REJECTS.add(url)
-
 # --- LOGIC ---
 def is_junk_content(name, url):
     if not url: return False
@@ -169,27 +129,24 @@ def validate_instructions(inst):
         return has_content
     return True
 
-def check_integrity(recipe, service="mealie"):
-    slug_or_id = recipe.get('slug') if service == "mealie" else recipe.get('id')
-    if slug_or_id in VERIFIED: return None
+def check_integrity(recipe):
+    slug = recipe.get('slug')
+    if slug in VERIFIED: return None
     
     name = recipe.get('name')
     url = recipe.get('orgURL') or recipe.get('originalURL') or recipe.get('source')
     
     try:
         inst = None
-        if service == "mealie":
-            headers = {"Authorization": f"Bearer {MEALIE_API_TOKEN}"}
-            r = requests.get(f"{MEALIE_URL}/api/recipes/{slug_or_id}", headers=headers, timeout=10)
-            if r.status_code == 200:
-                inst = r.json().get('recipeInstructions')
-        else:
-            inst = recipe.get('steps') or recipe.get('description')
+        headers = {"Authorization": f"Bearer {MEALIE_API_TOKEN}"}
+        r = requests.get(f"{MEALIE_URL}/api/recipes/{slug}", headers=headers, timeout=10)
+        if r.status_code == 200:
+            inst = r.json().get('recipeInstructions')
 
         if not validate_instructions(inst):
-            return (slug_or_id, name, "Empty/Broken Instructions", url, service)
+            return (slug, name, "Empty/Broken Instructions", url)
         
-        return (slug_or_id, "VERIFIED")
+        return (slug, "VERIFIED")
     except: return None
 
 # --- MAIN ---
@@ -202,9 +159,7 @@ if __name__ == "__main__":
         logger.info("="*40)
 
         all_m = get_mealie_recipes()
-        all_t = get_tandoor_recipes()
-        
-        tasks = [(r, "mealie") for r in all_m] + [(r, "tandoor") for r in all_t]
+        tasks = all_m
         
         if not tasks:
             logger.info("No recipes found to scan.")
@@ -212,21 +167,20 @@ if __name__ == "__main__":
 
         logger.info("--- Phase 1: Surgical Filter Scan ---")
         clean_tasks = []
-        for recipe, svc in tasks:
+        for recipe in tasks:
             name = recipe.get('name', 'Unknown')
             url = recipe.get('orgURL') or recipe.get('originalURL') or recipe.get('source')
-            id_val = recipe.get('slug') if svc == "mealie" else recipe.get('id')
+            id_val = recipe.get('slug')
             
             if is_junk_content(name, url):
-                if svc == "mealie": delete_mealie_recipe(id_val, name, "JUNK CONTENT", url)
-                else: delete_tandoor_recipe(id_val, name, "JUNK CONTENT", url)
+                delete_mealie_recipe(id_val, name, "JUNK CONTENT", url)
             else:
-                clean_tasks.append((recipe, svc))
+                clean_tasks.append(recipe)
 
         logger.info(f"--- Phase 2: Deep Integrity Scan (Checking {len(clean_tasks)} recipes) ---")
         
         with concurrent.futures.ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
-            futures = [executor.submit(check_integrity, r, s) for r, s in clean_tasks]
+            futures = [executor.submit(check_integrity, r) for r in clean_tasks]
             
             for i, f in enumerate(concurrent.futures.as_completed(futures)):
                 res = f.result()
@@ -234,11 +188,8 @@ if __name__ == "__main__":
                     if res[1] == "VERIFIED":
                         VERIFIED.add(res[0])
                     else:
-                        r_id, r_name, r_reason, r_url, r_svc = res
-                        if r_svc == "mealie": 
-                            delete_mealie_recipe(r_id, r_name, r_reason, r_url)
-                        else: 
-                            delete_tandoor_recipe(r_id, r_name, r_reason, r_url)
+                        r_id, r_name, r_reason, r_url = res
+                        delete_mealie_recipe(r_id, r_name, r_reason, r_url)
                 
                 if i % 10 == 0:
                     logger.debug(f"Progress: {i}/{len(clean_tasks)}")

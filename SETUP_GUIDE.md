@@ -2,7 +2,7 @@
 
 ## 📋 Prerequisites
 - Docker and Docker Compose installed
-- Mealie or Tandoor instance running
+- Mealie instance running
 - API token from your recipe manager
 
 ## 🚀 First-Time Setup (5 Minutes)
@@ -43,7 +43,6 @@ cd mealie-recipe-dredger
 
    **Finding your API token:**
    - Mealie: Settings → User Profile → API Tokens → Create Token
-   - Tandoor: Settings → API → Generate Token
 
 ### Step 3: Customize Sites (Optional)
 
@@ -96,7 +95,8 @@ Once you're happy with the test results:
 1. Edit `.env` and set `DRY_RUN=false`
 2. Run again:
    ```bash
-   docker compose up
+   ./scripts/docker/update.sh --branch main --service mealie-recipe-dredger
+   docker compose logs -f mealie-recipe-dredger
    ```
 
 ### Step 6: Schedule (Optional)
@@ -110,6 +110,21 @@ crontab -e
 # Add this line (adjust path to your docker-compose.yml location)
 0 3 * * 0 cd /path/to/recipe-dredger && docker compose up
 ```
+
+## 🔄 Update and Redeploy
+
+Use the helper script:
+
+```bash
+./scripts/docker/update.sh
+```
+
+Useful options:
+- `--skip-git-pull`
+- `--no-build`
+- `--branch <name>`
+- `--service <name>`
+- `--prune`
 
 ## 📁 Your Directory Structure
 
@@ -178,7 +193,7 @@ docker compose run --rm mealie-cleaner
 
 ### "API token errors"
 - Check your token is correct in `.env`
-- Regenerate token in Mealie/Tandoor if needed
+- Regenerate token in Mealie if needed
 - Ensure no trailing spaces in `.env` values
 
 ### "No recipes imported"
@@ -198,4 +213,4 @@ docker compose run --rm mealie-cleaner
 
 - Full README: https://github.com/D0rk4ce/mealie-recipe-dredger
 - Report Issues: https://github.com/D0rk4ce/mealie-recipe-dredger/issues
-- Check version: `docker run --rm ghcr.io/d0rk4ce/mealie-recipe-dredger:latest python dredger.py --version`
+- Check version: `docker compose run --rm mealie-recipe-dredger python dredger.py --version`
