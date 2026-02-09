@@ -8,6 +8,21 @@ class DummySession:
         raise AssertionError("Network should not be called for media prefilter")
 
 
+class DummyHttpResponse:
+    def __init__(self, html: str, status_code: int = 200):
+        self.status_code = status_code
+        self.text = html
+        self.content = html.encode("utf-8")
+
+
+class DummyHttpSession:
+    def __init__(self, html: str, status_code: int = 200):
+        self.response = DummyHttpResponse(html=html, status_code=status_code)
+
+    def get(self, url, timeout=10):
+        return self.response
+
+
 def test_prefilter_blocks_media_url_without_network_call():
     verifier = RecipeVerifier(DummySession())
     is_recipe, _soup, reason, transient = verifier.verify_recipe(
@@ -43,3 +58,60 @@ def test_paranoid_skip_allows_single_recipe_slug():
     verifier = RecipeVerifier(DummySession())
     reason = verifier.is_paranoid_skip("https://example.com/best-ever-banana-bread-recipe/")
     assert reason is None
+
+
+def test_verify_recipe_rejects_spanish_page():
+    html = """
+    <html lang="es">
+      <head>
+        <title>Tortilla Espanola</title>
+        <script type="application/ld+json">{"@type":"Recipe"}</script>
+      </head>
+      <body></body>
+    </html>
+    """
+    verifier = RecipeVerifier(DummyHttpSession(html))
+    is_recipe, _soup, reason, transient = verifier.verify_recipe("https://example.com/tortilla")
+
+    assert is_recipe is False
+    assert reason == "Language mismatch: es"
+    assert transient is False
+
+
+def test_verify_recipe_allows_english_page():
+    html = """
+    <html lang="en">
+      <head>
+        <title>Lemon Chicken Recipe</title>
+        <script type="application/ld+json">{"@type":"Recipe"}</script>
+      </head>
+      <body></body>
+    </html>
+    """
+    verifier = RecipeVerifier(DummyHttpSession(html))
+    is_recipe, _soup, reason, transient = verifier.verify_recipe("https://example.com/lemon-chicken")
+
+    assert is_recipe is True
+    assert reason is None
+    assert transient is False
+
+
+def test_verify_recipe_rejects_spanish_text_without_lang_attribute():
+    html = """
+    <html>
+      <head>
+        <title>Receta de pollo al horno</title>
+        <script type="application/ld+json">{"@type":"Recipe"}</script>
+      </head>
+      <body>
+        <p>Esta receta es facil y deliciosa para toda la familia.</p>
+        <p>Cocinar por 20 minutos y servir con arroz.</p>
+      </body>
+    </html>
+    """
+    verifier = RecipeVerifier(DummyHttpSession(html))
+    is_recipe, _soup, reason, transient = verifier.verify_recipe("https://example.com/pollo")
+
+    assert is_recipe is False
+    assert reason == "Language mismatch: es"
+    assert transient is False

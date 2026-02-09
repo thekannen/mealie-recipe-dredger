@@ -29,6 +29,20 @@ RESPECT_ROBOTS_TXT = os.getenv("RESPECT_ROBOTS_TXT", "true").lower() == "true"
 CACHE_EXPIRY_DAYS = int(os.getenv("CACHE_EXPIRY_DAYS", 7))
 MAX_RETRY_ATTEMPTS = int(os.getenv("MAX_RETRY_ATTEMPTS", 3))
 
+
+def _normalize_language(value: str) -> str:
+    cleaned = value.strip().lower().replace("_", "-")
+    if not cleaned:
+        return ""
+    return cleaned.split("-", 1)[0]
+
+
+TARGET_LANGUAGE = _normalize_language(os.getenv("TARGET_LANGUAGE", "en"))
+LANGUAGE_FILTER_ENABLED = os.getenv("LANGUAGE_FILTER_ENABLED", "true").lower() == "true"
+LANGUAGE_DETECTION_STRICT = os.getenv("LANGUAGE_DETECTION_STRICT", "true").lower() == "true"
+LANGUAGE_MIN_CONFIDENCE = float(os.getenv("LANGUAGE_MIN_CONFIDENCE", 0.70))
+CLEANER_REMOVE_NON_TARGET_LANGUAGE = os.getenv("CLEANER_REMOVE_NON_TARGET_LANGUAGE", "true").lower() == "true"
+
 REJECT_FILE = DATA_DIR / "rejects.json"
 IMPORTED_FILE = DATA_DIR / "imported.json"
 RETRY_FILE = DATA_DIR / "retry_queue.json"

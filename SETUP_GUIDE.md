@@ -14,6 +14,7 @@ Edit `.env` and set:
 - `MEALIE_URL`
 - `MEALIE_API_TOKEN`
 - `DRY_RUN=false` when ready for live imports
+- `TARGET_LANGUAGE=en` (or your preferred language code)
 
 ## 2. Optional site customization
 
@@ -43,6 +44,12 @@ docker compose run --rm -e TASK=cleaner -e RUN_MODE=once mealie-recipe-dredger
 If you want live deletion, set `DRY_RUN=false` in `.env` and rerun.
 
 To keep salvageable entries and clean names instead of deleting them (for example `How to Cook ...`), keep `CLEANER_RENAME_SALVAGE=true` in `.env`.
+
+To remove already-imported recipes that are not in your target language, keep these enabled in `.env` before running cleaner:
+- `LANGUAGE_FILTER_ENABLED=true`
+- `LANGUAGE_DETECTION_STRICT=true`
+- `CLEANER_REMOVE_NON_TARGET_LANGUAGE=true`
+- `TARGET_LANGUAGE=en`
 
 ## 5. Runtime controls
 

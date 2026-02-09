@@ -12,15 +12,21 @@ from urllib.parse import urlparse
 import requests
 
 from .config import (
+    CLEANER_REMOVE_NON_TARGET_LANGUAGE,
     DATA_DIR,
     HOW_TO_COOK_REGEX,
+    LANGUAGE_DETECTION_STRICT,
+    LANGUAGE_FILTER_ENABLED,
+    LANGUAGE_MIN_CONFIDENCE,
     LISTICLE_REGEX,
     LISTICLE_TITLE_REGEX,
     MEALIE_API_TOKEN,
     MEALIE_ENABLED,
     MEALIE_URL,
     NUMBERED_COLLECTION_REGEX,
+    TARGET_LANGUAGE,
 )
+from .language import detect_language_from_recipe_payload
 from .logging_utils import configure_logging
 
 DRY_RUN = os.getenv("DRY_RUN", "true").lower() == "true"
@@ -299,6 +305,23 @@ def validate_instructions(inst: Any) -> bool:
     return True
 
 
+def language_issue_for_payload(payload: dict[str, Any]) -> Optional[str]:
+    if not LANGUAGE_FILTER_ENABLED or not CLEANER_REMOVE_NON_TARGET_LANGUAGE or not TARGET_LANGUAGE:
+        return None
+
+    detected_language, _source, _confidence = detect_language_from_recipe_payload(
+        payload,
+        min_confidence=LANGUAGE_MIN_CONFIDENCE,
+    )
+    if detected_language and detected_language != TARGET_LANGUAGE:
+        return f"Language mismatch: {detected_language}"
+
+    if LANGUAGE_DETECTION_STRICT and not detected_language:
+        return "Language unknown"
+
+    return None
+
+
 def check_integrity(recipe: Dict[str, Any], verified: Set[str]) -> Optional[IntegrityResult]:
     slug = _as_optional_str(recipe.get("slug"))
     if not slug:
@@ -317,10 +340,18 @@ def check_integrity(recipe: Dict[str, Any], verified: Set[str]) -> Optional[Inte
     try:
         headers = {"Authorization": f"Bearer {MEALIE_API_TOKEN}"}
         response = requests.get(f"{MEALIE_URL}/api/recipes/{slug}", headers=headers, timeout=10)
-        inst = response.json().get("recipeInstructions") if response.status_code == 200 else None
+        payload = response.json() if response.status_code == 200 else {}
+        if not isinstance(payload, dict):
+            payload = {}
+
+        inst = payload.get("recipeInstructions")
 
         if not validate_instructions(inst):
             return slug, name, "Empty/Broken Instructions", url
+
+        language_issue = language_issue_for_payload(payload)
+        if language_issue:
+            return slug, name, language_issue, url
 
         return slug, "VERIFIED", "", None
     except Exception:

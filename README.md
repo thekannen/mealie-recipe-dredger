@@ -157,12 +157,31 @@ Primary required values in `.env`:
 Useful tuning values:
 - `DRY_RUN`
 - `CLEANER_RENAME_SALVAGE`
+- `TARGET_LANGUAGE` (default `en`)
+- `LANGUAGE_FILTER_ENABLED`
+- `LANGUAGE_DETECTION_STRICT`
+- `LANGUAGE_MIN_CONFIDENCE`
+- `CLEANER_REMOVE_NON_TARGET_LANGUAGE`
 - `TARGET_RECIPES_PER_SITE`
 - `SCAN_DEPTH`
 - `CRAWL_DELAY`
 - `CACHE_EXPIRY_DAYS`
 - `MEALIE_IMPORT_TIMEOUT`
 - `MAX_RETRY_ATTEMPTS`
+
+### Language filtering and post-hoc cleanup
+
+- New imports are filtered by `TARGET_LANGUAGE` in verifier (default `en`).
+- Unknown-language pages are rejected by default via `LANGUAGE_DETECTION_STRICT=true`.
+- Existing imported recipes can be cleaned after the fact by running cleaner with:
+- `CLEANER_REMOVE_NON_TARGET_LANGUAGE=true`
+- `LANGUAGE_FILTER_ENABLED=true`
+
+Example cleanup run:
+
+```bash
+docker compose run --rm -e TASK=cleaner -e RUN_MODE=once -e DRY_RUN=false mealie-recipe-dredger
+```
 
 Site source priority:
 1. CLI `--sites`

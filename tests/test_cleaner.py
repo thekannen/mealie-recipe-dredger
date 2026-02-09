@@ -1,4 +1,5 @@
-from mealie_recipe_dredger.cleaner import classify_recipe_action, is_junk_content, suggest_salvage_name
+import mealie_recipe_dredger.cleaner as cleaner_module
+from mealie_recipe_dredger.cleaner import classify_recipe_action, is_junk_content, language_issue_for_payload, suggest_salvage_name
 
 
 def test_is_junk_content_blocks_listicle_slug_without_source_url():
@@ -69,3 +70,65 @@ def test_classify_recipe_action_blocks_numbered_roundup():
     )
     assert action == "delete"
     assert reason == "Listicle/roundup"
+
+
+def test_language_issue_for_payload_flags_spanish(monkeypatch):
+    monkeypatch.setattr(cleaner_module, "LANGUAGE_FILTER_ENABLED", True)
+    monkeypatch.setattr(cleaner_module, "CLEANER_REMOVE_NON_TARGET_LANGUAGE", True)
+    monkeypatch.setattr(cleaner_module, "LANGUAGE_DETECTION_STRICT", False)
+    monkeypatch.setattr(cleaner_module, "TARGET_LANGUAGE", "en")
+
+    payload = {
+        "name": "Receta de pollo guisado",
+        "description": "Esta receta es facil y deliciosa para toda la familia.",
+        "recipeIngredient": [
+            "1 pollo",
+            "2 cucharadas de aceite",
+            "sal y pimienta",
+        ],
+        "recipeInstructions": [
+            "Calienta el aceite y cocina el pollo por 20 minutos.",
+            "Agrega sal y sirve caliente.",
+        ],
+    }
+
+    assert language_issue_for_payload(payload) == "Language mismatch: es"
+
+
+def test_language_issue_for_payload_allows_english(monkeypatch):
+    monkeypatch.setattr(cleaner_module, "LANGUAGE_FILTER_ENABLED", True)
+    monkeypatch.setattr(cleaner_module, "CLEANER_REMOVE_NON_TARGET_LANGUAGE", True)
+    monkeypatch.setattr(cleaner_module, "LANGUAGE_DETECTION_STRICT", False)
+    monkeypatch.setattr(cleaner_module, "TARGET_LANGUAGE", "en")
+
+    payload = {
+        "name": "Lemon Chicken",
+        "description": "This recipe is easy and perfect for weeknight dinner.",
+        "recipeIngredient": [
+            "2 chicken breasts",
+            "1 lemon",
+            "salt and pepper",
+        ],
+        "recipeInstructions": [
+            "Season chicken with salt and pepper.",
+            "Cook for 20 minutes and serve.",
+        ],
+    }
+
+    assert language_issue_for_payload(payload) is None
+
+
+def test_language_issue_for_payload_strict_unknown(monkeypatch):
+    monkeypatch.setattr(cleaner_module, "LANGUAGE_FILTER_ENABLED", True)
+    monkeypatch.setattr(cleaner_module, "CLEANER_REMOVE_NON_TARGET_LANGUAGE", True)
+    monkeypatch.setattr(cleaner_module, "LANGUAGE_DETECTION_STRICT", True)
+    monkeypatch.setattr(cleaner_module, "TARGET_LANGUAGE", "en")
+
+    payload = {
+        "name": "Qwrt Lkpm",
+        "description": "Zxvc qwer asdf zxcv.",
+        "recipeIngredient": ["qwer", "asdf"],
+        "recipeInstructions": ["qwer asdf zxcv"],
+    }
+
+    assert language_issue_for_payload(payload) == "Language unknown"

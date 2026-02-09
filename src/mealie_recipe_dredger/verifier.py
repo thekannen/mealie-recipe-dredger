@@ -8,13 +8,18 @@ from bs4 import BeautifulSoup
 from .config import (
     BAD_KEYWORDS,
     HOW_TO_COOK_REGEX,
+    LANGUAGE_DETECTION_STRICT,
+    LANGUAGE_FILTER_ENABLED,
+    LANGUAGE_MIN_CONFIDENCE,
     LISTICLE_REGEX,
     LISTICLE_TITLE_REGEX,
     NUMBERED_COLLECTION_REGEX,
     NON_RECIPE_EXTENSIONS,
     NON_RECIPE_PATH_HINTS,
+    TARGET_LANGUAGE,
     TRANSIENT_HTTP_CODES,
 )
+from .language import detect_language_from_html
 
 RECIPE_CLASS_PATTERN = re.compile(r"(wp-recipe-maker|tasty-recipes|mv-create-card|recipe-card)")
 
@@ -101,6 +106,17 @@ class RecipeVerifier:
 
             if soup is None:
                 soup = BeautifulSoup(response.content, "lxml")
+
+            if LANGUAGE_FILTER_ENABLED and TARGET_LANGUAGE:
+                detected_language, _source, _confidence = detect_language_from_html(
+                    soup,
+                    response_text=response.text,
+                    min_confidence=LANGUAGE_MIN_CONFIDENCE,
+                )
+                if detected_language and detected_language != TARGET_LANGUAGE:
+                    return False, soup, f"Language mismatch: {detected_language}", False
+                if LANGUAGE_DETECTION_STRICT and not detected_language:
+                    return False, soup, "Language unknown", False
 
             skip_reason = self.is_paranoid_skip(url, soup)
             if skip_reason:
