@@ -1,6 +1,21 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [1.0.0-beta.13] - 2026-02-09
+
+### Added
+- **Import Duplicate Precheck:** Added `IMPORT_PRECHECK_DUPLICATES=true` to precheck Mealie library by canonical source URL before posting imports.
+- **Cleaner Source Dedupe Phase:** Added `CLEANER_DEDUPE_BY_SOURCE=true` and a new cleaner Phase 0 that removes duplicate recipes sharing the same canonical source URL.
+- **Canonical URL Utilities:** Added shared canonicalization helpers for URL normalization and numeric title suffix handling in `url_utils.py`.
+- **Duplicate Test Coverage:** Added tests for canonical URL normalization, import precheck duplicate short-circuiting, and cleaner source-dedupe behavior.
+
+### Changed
+- **Generalized Language Detection:** Replaced fixed-language/script heuristics with generalized `langdetect`-based detection for all non-target languages.
+- **Language Cleanup Coverage:** Cleaner now re-checks previously verified recipes when language cleanup is enabled, so older records are not skipped.
+- **Runtime URL Keying:** Import/reject/retry state now uses canonicalized URL keys to avoid treating tracking-query variants as separate entries.
+- **Cleaner API Robustness:** Rename/delete/detail lookups now fall back to recipe `id` when slug-based API calls return `NoResultFound`.
+- **Documentation & Env Template:** Updated README, setup guide, and `.env.example` with new duplicate/language controls.
+
 ## [1.0.0-beta.12] - 2026-02-08
 
 ### Changed
