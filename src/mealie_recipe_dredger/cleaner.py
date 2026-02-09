@@ -12,6 +12,7 @@ from urllib.parse import urlparse
 import requests
 
 from .config import (
+    CLEANER_DEDUPE_BY_SOURCE,
     CLEANER_REMOVE_NON_TARGET_LANGUAGE,
     DATA_DIR,
     HOW_TO_COOK_REGEX,
@@ -28,6 +29,7 @@ from .config import (
 )
 from .language import detect_language_from_recipe_payload
 from .logging_utils import configure_logging
+from .url_utils import canonicalize_url, has_numeric_suffix, numeric_suffix_value, strip_numeric_suffix
 
 DRY_RUN = os.getenv("DRY_RUN", "true").lower() == "true"
 MAX_WORKERS = int(os.getenv("MAX_WORKERS", 2))
@@ -88,6 +90,16 @@ def _as_optional_recipe_id(value: object) -> Optional[str]:
 
 def _extract_recipe_id(recipe: Dict[str, Any]) -> Optional[str]:
     return _as_optional_recipe_id(recipe.get("id")) or _as_optional_recipe_id(recipe.get("recipeId"))
+
+
+def _recipe_identity(recipe: Dict[str, Any]) -> str:
+    recipe_id = _extract_recipe_id(recipe)
+    if recipe_id:
+        return f"id:{recipe_id}"
+    slug = _as_optional_str(recipe.get("slug"))
+    if slug:
+        return f"slug:{slug}"
+    return f"obj:{id(recipe)}"
 
 
 def _build_recipe_resource_urls(slug: Optional[str], recipe_id: Optional[str]) -> List[str]:
@@ -221,6 +233,76 @@ def _slug_fallback(url: Optional[str], slug: Optional[str]) -> str:
             return ""
 
     return ""
+
+
+def _recipe_source_url(recipe: Dict[str, Any]) -> Optional[str]:
+    return (
+        _as_optional_str(recipe.get("orgURL"))
+        or _as_optional_str(recipe.get("originalURL"))
+        or _as_optional_str(recipe.get("source"))
+    )
+
+
+def _dedupe_keeper_sort_key(recipe: Dict[str, Any]) -> Tuple[int, int, int, int]:
+    name = _as_optional_str(recipe.get("name")) or ""
+    stripped_name = strip_numeric_suffix(name)
+    return (
+        1 if has_numeric_suffix(name) else 0,
+        numeric_suffix_value(name),
+        len(stripped_name),
+        len(_as_optional_str(recipe.get("slug")) or ""),
+    )
+
+
+def dedupe_duplicate_source_recipes(
+    recipes: List[Dict[str, Any]],
+    rejects: Set[str],
+    verified: Set[str],
+) -> Tuple[List[Dict[str, Any]], int, int]:
+    groups: Dict[str, List[Dict[str, Any]]] = {}
+    for recipe in recipes:
+        source_url = _recipe_source_url(recipe)
+        canonical_source = canonicalize_url(source_url)
+        if not canonical_source:
+            continue
+        groups.setdefault(canonical_source, []).append(recipe)
+
+    duplicate_groups = {source: group for source, group in groups.items() if len(group) > 1}
+    if not duplicate_groups:
+        return recipes, 0, 0
+
+    to_remove: Set[str] = set()
+    deleted_count = 0
+    for canonical_source, group in duplicate_groups.items():
+        sorted_group = sorted(group, key=_dedupe_keeper_sort_key)
+        keeper = sorted_group[0]
+        keeper_name = _as_optional_str(keeper.get("name")) or "Unknown"
+        logger.info(
+            f"🔁 Duplicate source detected ({len(group)}): keeping '{keeper_name}' from {canonical_source}"
+        )
+
+        for duplicate in sorted_group[1:]:
+            duplicate_slug = _as_optional_str(duplicate.get("slug"))
+            duplicate_name = _as_optional_str(duplicate.get("name")) or "Unknown"
+            duplicate_id = _extract_recipe_id(duplicate)
+            duplicate_url = _recipe_source_url(duplicate)
+            if not duplicate_slug:
+                continue
+
+            delete_mealie_recipe(
+                duplicate_slug,
+                duplicate_name,
+                f"Duplicate source URL: {canonical_source}",
+                rejects,
+                verified,
+                duplicate_url,
+                recipe_id=duplicate_id,
+            )
+            to_remove.add(_recipe_identity(duplicate))
+            deleted_count += 1
+
+    filtered = [recipe for recipe in recipes if _recipe_identity(recipe) not in to_remove]
+    return filtered, len(duplicate_groups), deleted_count
 
 
 def normalize_recipe_name(candidate: str) -> str:
@@ -440,6 +522,11 @@ def run_cleaner() -> int:
     if not tasks:
         logger.info("No recipes found to scan.")
         return 0
+
+    if CLEANER_DEDUPE_BY_SOURCE:
+        logger.info("--- Phase 0: Duplicate Source Scan ---")
+        tasks, duplicate_groups, duplicate_deletes = dedupe_duplicate_source_recipes(tasks, rejects, verified)
+        logger.info(f"Duplicate source groups: {duplicate_groups}, removed: {duplicate_deletes}")
 
     logger.info("--- Phase 1: Surgical Filter Scan ---")
     clean_tasks: List[Dict[str, Any]] = []

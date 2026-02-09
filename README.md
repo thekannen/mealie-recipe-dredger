@@ -157,6 +157,8 @@ Primary required values in `.env`:
 Useful tuning values:
 - `DRY_RUN`
 - `CLEANER_RENAME_SALVAGE`
+- `IMPORT_PRECHECK_DUPLICATES`
+- `CLEANER_DEDUPE_BY_SOURCE`
 - `TARGET_LANGUAGE` (default `en`)
 - `LANGUAGE_FILTER_ENABLED`
 - `LANGUAGE_DETECTION_STRICT`
@@ -183,6 +185,12 @@ Example cleanup run:
 ```bash
 docker compose run --rm -e TASK=cleaner -e RUN_MODE=once -e DRY_RUN=false mealie-recipe-dredger
 ```
+
+### Duplicate prevention and cleanup
+
+- Import-time: `IMPORT_PRECHECK_DUPLICATES=true` checks Mealie for canonical source URL duplicates before posting import.
+- Cleaner: `CLEANER_DEDUPE_BY_SOURCE=true` removes duplicate recipes that share the same canonical source URL.
+- Name collisions from different sites are not auto-deleted solely by title; source URL is used as the safe dedupe key.
 
 Site source priority:
 1. CLI `--sites`

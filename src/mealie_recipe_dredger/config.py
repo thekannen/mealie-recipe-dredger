@@ -28,6 +28,7 @@ RESPECT_ROBOTS_TXT = os.getenv("RESPECT_ROBOTS_TXT", "true").lower() == "true"
 
 CACHE_EXPIRY_DAYS = int(os.getenv("CACHE_EXPIRY_DAYS", 7))
 MAX_RETRY_ATTEMPTS = int(os.getenv("MAX_RETRY_ATTEMPTS", 3))
+IMPORT_PRECHECK_DUPLICATES = os.getenv("IMPORT_PRECHECK_DUPLICATES", "true").lower() == "true"
 
 
 def _normalize_language(value: str) -> str:
@@ -42,6 +43,7 @@ LANGUAGE_FILTER_ENABLED = os.getenv("LANGUAGE_FILTER_ENABLED", "true").lower() =
 LANGUAGE_DETECTION_STRICT = os.getenv("LANGUAGE_DETECTION_STRICT", "true").lower() == "true"
 LANGUAGE_MIN_CONFIDENCE = float(os.getenv("LANGUAGE_MIN_CONFIDENCE", 0.70))
 CLEANER_REMOVE_NON_TARGET_LANGUAGE = os.getenv("CLEANER_REMOVE_NON_TARGET_LANGUAGE", "true").lower() == "true"
+CLEANER_DEDUPE_BY_SOURCE = os.getenv("CLEANER_DEDUPE_BY_SOURCE", "true").lower() == "true"
 
 REJECT_FILE = DATA_DIR / "rejects.json"
 IMPORTED_FILE = DATA_DIR / "imported.json"

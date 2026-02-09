@@ -13,6 +13,7 @@ from .config import (
     STATS_FILE,
 )
 from .models import SiteStats
+from .url_utils import canonicalize_url
 
 logger = logging.getLogger("dredger")
 
@@ -21,7 +22,7 @@ class StorageManager:
     def __init__(self):
         self.rejects: Set[str] = self._load_json_set(REJECT_FILE)
         self.imported: Set[str] = self._load_json_set(IMPORTED_FILE)
-        self.retry_queue: Dict[str, dict] = self._load_json_dict(RETRY_FILE)
+        self.retry_queue: Dict[str, dict] = self._canonicalize_retry_queue(self._load_json_dict(RETRY_FILE))
         self.stats: Dict[str, dict] = self._load_json_dict(STATS_FILE)
         self.sitemap_cache: Dict[str, dict] = self._load_json_dict(SITEMAP_CACHE_FILE)
 
@@ -31,7 +32,16 @@ class StorageManager:
     def _load_json_set(self, filename: Path) -> Set[str]:
         if filename.exists():
             try:
-                return set(json.loads(filename.read_text(encoding="utf-8")))
+                raw = json.loads(filename.read_text(encoding="utf-8"))
+                if isinstance(raw, list):
+                    normalized = set()
+                    for entry in raw:
+                        if not isinstance(entry, str):
+                            continue
+                        normalized_entry = self._normalize_url_key(entry)
+                        if normalized_entry:
+                            normalized.add(normalized_entry)
+                    return normalized
             except Exception as exc:
                 logger.warning(f"Error loading {filename}: {exc}")
         return set()
@@ -50,27 +60,52 @@ class StorageManager:
     def _save_json_dict(self, filename: Path, data_dict: dict):
         filename.write_text(json.dumps(data_dict, indent=2), encoding="utf-8")
 
+    def _normalize_url_key(self, url: str) -> str:
+        normalized = canonicalize_url(url)
+        return normalized or url.strip().lower()
+
+    def _canonicalize_retry_queue(self, queue: dict) -> Dict[str, dict]:
+        if not isinstance(queue, dict):
+            return {}
+
+        normalized: Dict[str, dict] = {}
+        for key, value in queue.items():
+            if not isinstance(key, str) or not isinstance(value, dict):
+                continue
+            normalized_key = self._normalize_url_key(key)
+            if normalized_key in normalized:
+                existing_attempts = int(normalized[normalized_key].get("attempts", 0))
+                incoming_attempts = int(value.get("attempts", 0))
+                if incoming_attempts > existing_attempts:
+                    normalized[normalized_key] = value
+                continue
+            normalized[normalized_key] = value
+        return normalized
+
     def add_imported(self, url: str):
-        self.imported.add(url)
-        if url in self.retry_queue:
-            self.retry_queue.pop(url, None)
+        url_key = self._normalize_url_key(url)
+        self.imported.add(url_key)
+        if url_key in self.retry_queue:
+            self.retry_queue.pop(url_key, None)
         self._changes_since_flush += 1
         self._auto_flush()
 
     def add_reject(self, url: str):
-        self.rejects.add(url)
-        if url in self.retry_queue:
-            self.retry_queue.pop(url, None)
+        url_key = self._normalize_url_key(url)
+        self.rejects.add(url_key)
+        if url_key in self.retry_queue:
+            self.retry_queue.pop(url_key, None)
         self._changes_since_flush += 1
         self._auto_flush()
 
     def add_retry(self, url: str, reason: str, increment: bool = False):
-        existing = self.retry_queue.get(url, {})
+        url_key = self._normalize_url_key(url)
+        existing = self.retry_queue.get(url_key, {})
         attempts = int(existing.get("attempts", 0))
         if increment:
             attempts += 1
 
-        self.retry_queue[url] = {
+        self.retry_queue[url_key] = {
             "reason": reason,
             "attempts": attempts,
             "last_attempt": datetime.now().isoformat(),
@@ -79,8 +114,9 @@ class StorageManager:
         self._auto_flush()
 
     def remove_retry(self, url: str):
-        if url in self.retry_queue:
-            self.retry_queue.pop(url, None)
+        url_key = self._normalize_url_key(url)
+        if url_key in self.retry_queue:
+            self.retry_queue.pop(url_key, None)
             self._changes_since_flush += 1
             self._auto_flush()
 

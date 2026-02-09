@@ -5,6 +5,7 @@ from mealie_recipe_dredger.cleaner import (
     _should_skip_verified,
     check_integrity,
     classify_recipe_action,
+    dedupe_duplicate_source_recipes,
     is_junk_content,
     language_issue_for_payload,
     suggest_salvage_name,
@@ -209,3 +210,39 @@ def test_check_integrity_rechecks_verified_when_language_cleanup_enabled(monkeyp
     result = check_integrity({"slug": "slug-a", "id": "id-a", "name": "Lemon Chicken"}, {"slug-a"})
     assert result is not None
     assert result[1] == "VERIFIED"
+
+
+def test_dedupe_duplicate_source_recipes_deletes_same_source_duplicates(monkeypatch):
+    deleted_slugs = []
+
+    def fake_delete(slug, name, reason, rejects, verified, url=None, recipe_id=None):
+        deleted_slugs.append(slug)
+
+    monkeypatch.setattr(cleaner_module, "delete_mealie_recipe", fake_delete)
+
+    recipes = [
+        {
+            "id": "id-1",
+            "slug": "zobo-drink-hibiscus-drink",
+            "name": "Zobo Drink (Hibiscus Drink)",
+            "orgURL": "https://www.myactivekitchen.com/refreshing-zobo-drink-zobo-tutu/",
+        },
+        {
+            "id": "id-2",
+            "slug": "zobo-drink-hibiscus-drink-1",
+            "name": "Zobo Drink (Hibiscus Drink) (1)",
+            "orgURL": "https://myactivekitchen.com/refreshing-zobo-drink-zobo-tutu/?utm_source=site",
+        },
+        {
+            "id": "id-3",
+            "slug": "another-zobo-recipe",
+            "name": "Zobo Drink",
+            "orgURL": "https://example.com/another-recipe",
+        },
+    ]
+
+    filtered, groups, deleted = dedupe_duplicate_source_recipes(recipes, set(), set())
+    assert groups == 1
+    assert deleted == 1
+    assert deleted_slugs == ["zobo-drink-hibiscus-drink-1"]
+    assert len(filtered) == 2

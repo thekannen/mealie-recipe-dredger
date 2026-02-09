@@ -19,6 +19,7 @@ from .config import (
     __version__,
 )
 from .logging_utils import configure_logging
+from .url_utils import canonicalize_url
 
 if TYPE_CHECKING:
     from .storage import StorageManager
@@ -69,11 +70,12 @@ def process_retry_queue(
     logger.info(f"🔁 Processing Retry Queue: {len(pending)} URL(s)")
 
     for url, meta in pending:
+        url_key = canonicalize_url(url) or url
         attempts = int(meta.get("attempts", 0))
         if attempts >= MAX_RETRY_ATTEMPTS:
             logger.warning(f"   ❌ Giving up after {attempts} attempts: {url}")
-            storage.remove_retry(url)
-            storage.add_reject(url)
+            storage.remove_retry(url_key)
+            storage.add_reject(url_key)
             continue
 
         rate_limiter.wait_if_needed(url)
@@ -81,28 +83,26 @@ def process_retry_queue(
 
         if not is_recipe:
             if verify_transient:
-                storage.add_retry(url, verify_error or "Transient verification failure", increment=True)
-                logger.warning(
-                    f"   ↻ Retry queued ({storage.retry_queue[url]['attempts']}/{MAX_RETRY_ATTEMPTS}) [verify]: {url}"
-                )
+                storage.add_retry(url_key, verify_error or "Transient verification failure", increment=True)
+                queue_entry = storage.retry_queue.get(url_key, {})
+                logger.warning(f"   ↻ Retry queued ({queue_entry.get('attempts', 0)}/{MAX_RETRY_ATTEMPTS}) [verify]: {url}")
             else:
-                storage.remove_retry(url)
-                storage.add_reject(url)
+                storage.remove_retry(url_key)
+                storage.add_reject(url_key)
             continue
 
         imported, import_error, import_transient = importer.import_recipe(url)
         if imported:
-            storage.add_imported(url)
+            storage.add_imported(url_key)
             continue
 
         if import_transient:
-            storage.add_retry(url, import_error or "Transient import failure", increment=True)
-            logger.warning(
-                f"   ↻ Retry queued ({storage.retry_queue[url]['attempts']}/{MAX_RETRY_ATTEMPTS}) [import]: {url}"
-            )
+            storage.add_retry(url_key, import_error or "Transient import failure", increment=True)
+            queue_entry = storage.retry_queue.get(url_key, {})
+            logger.warning(f"   ↻ Retry queued ({queue_entry.get('attempts', 0)}/{MAX_RETRY_ATTEMPTS}) [import]: {url}")
         else:
-            storage.remove_retry(url)
-            storage.add_reject(url)
+            storage.remove_retry(url_key)
+            storage.add_reject(url_key)
 
 
 def _parse_sites_json(data) -> List[str]:
@@ -229,8 +229,9 @@ def run(args: argparse.Namespace) -> int:
                 break
 
             url = candidate.url
+            url_key = canonicalize_url(url) or url
 
-            if url in storage.imported or url in storage.rejects or url in storage.retry_queue:
+            if url_key in storage.imported or url_key in storage.rejects or url_key in storage.retry_queue:
                 continue
 
             rate_limiter.wait_if_needed(url)
@@ -240,34 +241,36 @@ def run(args: argparse.Namespace) -> int:
             if is_recipe:
                 imported, import_error, import_transient = importer.import_recipe(url)
                 if imported:
-                    storage.add_imported(url)
+                    storage.add_imported(url_key)
                     imported_count += 1
                     site_stats["imported"] += 1
                 else:
                     site_stats["errors"] += 1
                     if import_transient:
-                        storage.add_retry(url, import_error or "Transient import failure", increment=True)
+                        storage.add_retry(url_key, import_error or "Transient import failure", increment=True)
                         if not TQDM_AVAILABLE:
+                            queue_entry = storage.retry_queue.get(url_key, {})
                             logger.warning(
                                 f"   ↻ Transient import failure queued for retry "
-                                f"({storage.retry_queue[url]['attempts']}/{MAX_RETRY_ATTEMPTS}): {url}"
+                                f"({queue_entry.get('attempts', 0)}/{MAX_RETRY_ATTEMPTS}): {url}"
                             )
                     else:
-                        storage.add_reject(url)
+                        storage.add_reject(url_key)
                         if not TQDM_AVAILABLE:
                             logger.error(f"   ❌ Import failed ({import_error}): {url}")
             else:
                 if is_transient:
-                    storage.add_retry(url, error or "Transient verification failure", increment=True)
+                    storage.add_retry(url_key, error or "Transient verification failure", increment=True)
                     if not TQDM_AVAILABLE:
+                        queue_entry = storage.retry_queue.get(url_key, {})
                         logger.warning(
                             f"   ↻ Transient verification failure queued for retry "
-                            f"({storage.retry_queue[url]['attempts']}/{MAX_RETRY_ATTEMPTS}): {url}"
+                            f"({queue_entry.get('attempts', 0)}/{MAX_RETRY_ATTEMPTS}): {url}"
                         )
                 else:
                     if not TQDM_AVAILABLE:
                         logger.debug(f"   Skipping ({error}): {url}")
-                    storage.add_reject(url)
+                    storage.add_reject(url_key)
                     site_stats["rejected"] += 1
 
         if not TQDM_AVAILABLE:

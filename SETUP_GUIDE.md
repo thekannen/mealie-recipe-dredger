@@ -53,6 +53,10 @@ To remove already-imported recipes that are not in your target language, keep th
 
 Language detection is generalized (`langdetect`) so cleanup is not limited to a hardcoded language pair.
 
+To prevent and clean true duplicates:
+- `IMPORT_PRECHECK_DUPLICATES=true` (prevents re-import by canonical source URL)
+- `CLEANER_DEDUPE_BY_SOURCE=true` (removes existing duplicates sharing canonical source URL)
+
 ## 5. Runtime controls
 
 Supported container env vars:
