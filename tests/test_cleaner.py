@@ -1,5 +1,14 @@
 import mealie_recipe_dredger.cleaner as cleaner_module
-from mealie_recipe_dredger.cleaner import classify_recipe_action, is_junk_content, language_issue_for_payload, suggest_salvage_name
+from mealie_recipe_dredger.cleaner import (
+    _build_recipe_resource_urls,
+    _is_no_result_error,
+    _should_skip_verified,
+    check_integrity,
+    classify_recipe_action,
+    is_junk_content,
+    language_issue_for_payload,
+    suggest_salvage_name,
+)
 
 
 def test_is_junk_content_blocks_listicle_slug_without_source_url():
@@ -123,6 +132,11 @@ def test_language_issue_for_payload_strict_unknown(monkeypatch):
     monkeypatch.setattr(cleaner_module, "CLEANER_REMOVE_NON_TARGET_LANGUAGE", True)
     monkeypatch.setattr(cleaner_module, "LANGUAGE_DETECTION_STRICT", True)
     monkeypatch.setattr(cleaner_module, "TARGET_LANGUAGE", "en")
+    monkeypatch.setattr(
+        cleaner_module,
+        "detect_language_from_recipe_payload",
+        lambda payload, min_confidence=0.70: (None, "unknown", 0.0),
+    )
 
     payload = {
         "name": "Qwrt Lkpm",
@@ -132,3 +146,66 @@ def test_language_issue_for_payload_strict_unknown(monkeypatch):
     }
 
     assert language_issue_for_payload(payload) == "Language unknown"
+
+
+def test_build_recipe_resource_urls_prefers_id_before_slug():
+    urls = _build_recipe_resource_urls("my-slug", "recipe-uuid-123")
+    assert urls[0].endswith("/api/recipes/recipe-uuid-123")
+    assert urls[1].endswith("/api/recipes/my-slug")
+
+
+def test_is_no_result_error_detects_mealie_noresultfound_payload():
+    body = '{"detail":{"message":"Unknown Error","error":true,"exception":"NoResultFound"}}'
+    assert _is_no_result_error(500, body)
+
+
+def test_language_issue_for_payload_flags_hindi_script(monkeypatch):
+    monkeypatch.setattr(cleaner_module, "LANGUAGE_FILTER_ENABLED", True)
+    monkeypatch.setattr(cleaner_module, "CLEANER_REMOVE_NON_TARGET_LANGUAGE", True)
+    monkeypatch.setattr(cleaner_module, "LANGUAGE_DETECTION_STRICT", False)
+    monkeypatch.setattr(cleaner_module, "TARGET_LANGUAGE", "en")
+
+    payload = {
+        "name": "हिंदी चिकन करी",
+        "description": "यह एक स्वादिष्ट और आसान रेसिपी है।",
+        "recipeInstructions": ["कड़ाही गरम करें और मसाले डालें।"],
+    }
+    assert language_issue_for_payload(payload) == "Language mismatch: hi"
+
+
+def test_should_skip_verified_when_language_cleanup_disabled(monkeypatch):
+    monkeypatch.setattr(cleaner_module, "LANGUAGE_FILTER_ENABLED", False)
+    monkeypatch.setattr(cleaner_module, "CLEANER_REMOVE_NON_TARGET_LANGUAGE", True)
+    monkeypatch.setattr(cleaner_module, "TARGET_LANGUAGE", "en")
+    assert _should_skip_verified("slug-a", {"slug-a"})
+
+
+def test_should_not_skip_verified_when_language_cleanup_enabled(monkeypatch):
+    monkeypatch.setattr(cleaner_module, "LANGUAGE_FILTER_ENABLED", True)
+    monkeypatch.setattr(cleaner_module, "CLEANER_REMOVE_NON_TARGET_LANGUAGE", True)
+    monkeypatch.setattr(cleaner_module, "TARGET_LANGUAGE", "en")
+    assert not _should_skip_verified("slug-a", {"slug-a"})
+
+
+def test_check_integrity_rechecks_verified_when_language_cleanup_enabled(monkeypatch):
+    monkeypatch.setattr(cleaner_module, "LANGUAGE_FILTER_ENABLED", True)
+    monkeypatch.setattr(cleaner_module, "CLEANER_REMOVE_NON_TARGET_LANGUAGE", True)
+    monkeypatch.setattr(cleaner_module, "LANGUAGE_DETECTION_STRICT", False)
+    monkeypatch.setattr(cleaner_module, "TARGET_LANGUAGE", "en")
+
+    class DummyResponse:
+        status_code = 200
+        text = "{}"
+
+        @staticmethod
+        def json():
+            return {"recipeInstructions": ["Step 1"], "name": "Lemon Chicken"}
+
+    def fake_get(_url, headers=None, timeout=10):
+        return DummyResponse()
+
+    monkeypatch.setattr(cleaner_module.requests, "get", fake_get)
+
+    result = check_integrity({"slug": "slug-a", "id": "id-a", "name": "Lemon Chicken"}, {"slug-a"})
+    assert result is not None
+    assert result[1] == "VERIFIED"

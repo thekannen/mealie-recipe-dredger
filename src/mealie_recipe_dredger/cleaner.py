@@ -77,6 +77,41 @@ def _as_optional_str(value: object) -> Optional[str]:
     return None
 
 
+def _as_optional_recipe_id(value: object) -> Optional[str]:
+    if isinstance(value, str):
+        cleaned = value.strip()
+        return cleaned or None
+    if isinstance(value, int):
+        return str(value)
+    return None
+
+
+def _extract_recipe_id(recipe: Dict[str, Any]) -> Optional[str]:
+    return _as_optional_recipe_id(recipe.get("id")) or _as_optional_recipe_id(recipe.get("recipeId"))
+
+
+def _build_recipe_resource_urls(slug: Optional[str], recipe_id: Optional[str]) -> List[str]:
+    urls: List[str] = []
+    seen: Set[str] = set()
+
+    for identifier in (recipe_id, slug):
+        if not identifier:
+            continue
+        if identifier in seen:
+            continue
+        seen.add(identifier)
+        urls.append(f"{MEALIE_URL}/api/recipes/{identifier}")
+
+    return urls
+
+
+def _is_no_result_error(status_code: int, body: str) -> bool:
+    if status_code not in [404, 500]:
+        return False
+    lowered = (body or "").lower()
+    return "noresultfound" in lowered or "no result found" in lowered
+
+
 def load_json_set(filename: Path) -> Set[str]:
     if filename.exists():
         try:
@@ -138,6 +173,7 @@ def delete_mealie_recipe(
     rejects: Set[str],
     verified: Set[str],
     url: Optional[str] = None,
+    recipe_id: Optional[str] = None,
 ) -> None:
     if DRY_RUN:
         logger.info(f" [DRY RUN] Would delete from Mealie: '{name}' (Reason: {reason})")
@@ -145,16 +181,27 @@ def delete_mealie_recipe(
 
     headers = {"Authorization": f"Bearer {MEALIE_API_TOKEN}"}
     logger.info(f"🗑️ Deleting from Mealie: '{name}' (Reason: {reason})")
+    targets = _build_recipe_resource_urls(slug, recipe_id)
+    deleted = False
 
-    for attempt in range(3):
-        try:
-            response = requests.delete(f"{MEALIE_URL}/api/recipes/{slug}", headers=headers, timeout=10)
-            if response.status_code == 200:
-                break
-            time.sleep(1)
-        except Exception as exc:
-            logger.warning(f"Error deleting {slug} (Attempt {attempt + 1}): {exc}")
-            time.sleep(1)
+    for target in targets:
+        for attempt in range(3):
+            try:
+                response = requests.delete(target, headers=headers, timeout=10)
+                if response.status_code == 200:
+                    deleted = True
+                    break
+                if response.status_code in [404, 405] or _is_no_result_error(response.status_code, response.text):
+                    break
+                time.sleep(1)
+            except Exception as exc:
+                logger.warning(f"Error deleting {slug} (Attempt {attempt + 1}): {exc}")
+                time.sleep(1)
+        if deleted:
+            break
+
+    if not deleted:
+        logger.warning(f"Delete failed for '{name}' ({slug})")
 
     if url:
         rejects.add(url)
@@ -242,7 +289,7 @@ def is_junk_content(name: str, url: Optional[str], slug: Optional[str] = None) -
     return action == "delete"
 
 
-def rename_mealie_recipe(slug: str, old_name: str, new_name: str) -> bool:
+def rename_mealie_recipe(slug: str, old_name: str, new_name: str, recipe_id: Optional[str] = None) -> bool:
     if not new_name or old_name.strip().lower() == new_name.strip().lower():
         return True
 
@@ -252,32 +299,35 @@ def rename_mealie_recipe(slug: str, old_name: str, new_name: str) -> bool:
 
     headers = {"Authorization": f"Bearer {MEALIE_API_TOKEN}"}
     payload = {"name": new_name}
+    targets = _build_recipe_resource_urls(slug, recipe_id)
+    last_error: Optional[str] = None
 
-    for method in ("patch", "put"):
-        for attempt in range(3):
-            try:
-                if method == "patch":
-                    response = requests.patch(f"{MEALIE_URL}/api/recipes/{slug}", headers=headers, json=payload, timeout=10)
-                else:
-                    response = requests.put(f"{MEALIE_URL}/api/recipes/{slug}", headers=headers, json=payload, timeout=10)
+    for target in targets:
+        for method in ("patch", "put"):
+            for attempt in range(3):
+                try:
+                    if method == "patch":
+                        response = requests.patch(target, headers=headers, json=payload, timeout=10)
+                    else:
+                        response = requests.put(target, headers=headers, json=payload, timeout=10)
 
-                if response.status_code in [200, 201]:
-                    logger.info(f"✏️ Renamed in Mealie: '{old_name}' -> '{new_name}'")
-                    return True
+                    if response.status_code in [200, 201]:
+                        logger.info(f"✏️ Renamed in Mealie: '{old_name}' -> '{new_name}'")
+                        return True
 
-                if response.status_code in [404, 405]:
-                    break
+                    if response.status_code in [404, 405] or _is_no_result_error(response.status_code, response.text):
+                        break
 
-                if attempt == 2:
-                    logger.warning(
-                        f"Rename failed for '{old_name}' ({slug}) via {method.upper()}: "
-                        f"HTTP {response.status_code} {response.text[:180]}"
-                    )
-                time.sleep(1)
-            except Exception as exc:
-                if attempt == 2:
-                    logger.warning(f"Rename error for '{old_name}' ({slug}) via {method.upper()}: {exc}")
-                time.sleep(1)
+                    last_error = f"HTTP {response.status_code} {response.text[:180]}"
+                    time.sleep(1)
+                except Exception as exc:
+                    last_error = str(exc)
+                    time.sleep(1)
+
+    if last_error:
+        logger.warning(f"Rename failed for '{old_name}' ({slug}): {last_error}")
+    else:
+        logger.warning(f"Rename failed for '{old_name}' ({slug}): Not found")
 
     return False
 
@@ -322,12 +372,21 @@ def language_issue_for_payload(payload: dict[str, Any]) -> Optional[str]:
     return None
 
 
+def _should_skip_verified(slug: str, verified: Set[str]) -> bool:
+    # When language cleanup is enabled, always re-check previously verified recipes.
+    if LANGUAGE_FILTER_ENABLED and CLEANER_REMOVE_NON_TARGET_LANGUAGE and TARGET_LANGUAGE:
+        return False
+    return slug in verified
+
+
 def check_integrity(recipe: Dict[str, Any], verified: Set[str]) -> Optional[IntegrityResult]:
     slug = _as_optional_str(recipe.get("slug"))
     if not slug:
         return None
 
-    if slug in verified:
+    recipe_id = _extract_recipe_id(recipe)
+
+    if _should_skip_verified(slug, verified):
         return None
 
     name = _as_optional_str(recipe.get("name")) or "Unknown"
@@ -339,10 +398,17 @@ def check_integrity(recipe: Dict[str, Any], verified: Set[str]) -> Optional[Inte
 
     try:
         headers = {"Authorization": f"Bearer {MEALIE_API_TOKEN}"}
-        response = requests.get(f"{MEALIE_URL}/api/recipes/{slug}", headers=headers, timeout=10)
-        payload = response.json() if response.status_code == 200 else {}
-        if not isinstance(payload, dict):
-            payload = {}
+        payload: Dict[str, Any] = {}
+        for target in _build_recipe_resource_urls(slug, recipe_id):
+            response = requests.get(target, headers=headers, timeout=10)
+            if response.status_code == 200:
+                raw_payload = response.json()
+                if isinstance(raw_payload, dict):
+                    payload = raw_payload
+                break
+            if response.status_code in [404, 405] or _is_no_result_error(response.status_code, response.text):
+                continue
+            break
 
         inst = payload.get("recipeInstructions")
 
@@ -366,6 +432,8 @@ def run_cleaner() -> int:
     logger.info("MASTER CLEANER STARTED")
     logger.info(f"Mode: {'DRY RUN (Safe)' if DRY_RUN else 'LIVE (Destructive)'}")
     logger.info(f"Workers: {MAX_WORKERS}")
+    if LANGUAGE_FILTER_ENABLED and CLEANER_REMOVE_NON_TARGET_LANGUAGE and TARGET_LANGUAGE:
+        logger.info("Language cleanup enabled: re-checking previously verified recipes.")
     logger.info("=" * 40)
 
     tasks = get_mealie_recipes()
@@ -383,6 +451,7 @@ def run_cleaner() -> int:
             or _as_optional_str(recipe.get("source"))
         )
         slug = _as_optional_str(recipe.get("slug"))
+        recipe_id = _extract_recipe_id(recipe)
 
         if not slug:
             logger.debug(f"Skipping recipe with missing slug: {name}")
@@ -390,17 +459,26 @@ def run_cleaner() -> int:
 
         action, reason, new_name = classify_recipe_action(name, url, slug)
         if action == "delete":
-            delete_mealie_recipe(slug, name, reason or "JUNK CONTENT", rejects, verified, url)
+            delete_mealie_recipe(
+                slug,
+                name,
+                reason or "JUNK CONTENT",
+                rejects,
+                verified,
+                url,
+                recipe_id=recipe_id,
+            )
             continue
 
         if action == "rename" and new_name:
-            rename_mealie_recipe(slug, name, new_name)
+            rename_mealie_recipe(slug, name, new_name, recipe_id=recipe_id)
 
         clean_tasks.append(recipe)
 
     logger.info(f"--- Phase 2: Deep Integrity Scan (Checking {len(clean_tasks)} recipes) ---")
     with concurrent.futures.ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
         futures = [executor.submit(check_integrity, recipe, verified) for recipe in clean_tasks]
+        future_recipe_id = {future: _extract_recipe_id(recipe) for future, recipe in zip(futures, clean_tasks)}
 
         for index, future in enumerate(concurrent.futures.as_completed(futures)):
             result = future.result()
@@ -409,7 +487,15 @@ def run_cleaner() -> int:
                 if marker == "VERIFIED":
                     verified.add(slug)
                 else:
-                    delete_mealie_recipe(slug, marker, reason, rejects, verified, url)
+                    delete_mealie_recipe(
+                        slug,
+                        marker,
+                        reason,
+                        rejects,
+                        verified,
+                        url,
+                        recipe_id=future_recipe_id.get(future),
+                    )
 
             if index % 10 == 0:
                 logger.debug(f"Progress: {index}/{len(clean_tasks)}")

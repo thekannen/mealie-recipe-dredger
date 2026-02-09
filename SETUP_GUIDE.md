@@ -51,6 +51,8 @@ To remove already-imported recipes that are not in your target language, keep th
 - `CLEANER_REMOVE_NON_TARGET_LANGUAGE=true`
 - `TARGET_LANGUAGE=en`
 
+Language detection is generalized (`langdetect`) so cleanup is not limited to a hardcoded language pair.
+
 ## 5. Runtime controls
 
 Supported container env vars:

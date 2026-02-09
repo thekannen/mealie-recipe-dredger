@@ -3,79 +3,12 @@ import re
 from typing import Any, Iterable, Optional, Tuple
 
 from bs4 import BeautifulSoup
+from langdetect import DetectorFactory, LangDetectException, detect_langs
 
-ENGLISH_STOPWORDS = {
-    "a",
-    "an",
-    "and",
-    "are",
-    "as",
-    "at",
-    "be",
-    "but",
-    "by",
-    "for",
-    "from",
-    "in",
-    "into",
-    "is",
-    "it",
-    "of",
-    "on",
-    "or",
-    "that",
-    "the",
-    "this",
-    "to",
-    "was",
-    "with",
-    "you",
-    "your",
-    "recipe",
-    "ingredients",
-    "instructions",
-    "minutes",
-    "serve",
-    "cook",
-    "make",
-    "easy",
-}
+# Make detection deterministic between runs.
+DetectorFactory.seed = 0
 
-SPANISH_STOPWORDS = {
-    "a",
-    "al",
-    "con",
-    "de",
-    "del",
-    "el",
-    "en",
-    "es",
-    "esta",
-    "la",
-    "las",
-    "lo",
-    "los",
-    "para",
-    "por",
-    "que",
-    "se",
-    "sin",
-    "su",
-    "una",
-    "un",
-    "y",
-    "receta",
-    "ingredientes",
-    "instrucciones",
-    "minutos",
-    "cocinar",
-    "hacer",
-    "fácil",
-}
-
-LANGUAGE_TOKEN_RE = re.compile(r"[a-zA-ZáéíóúñüÁÉÍÓÚÑÜ]+")
 WHITESPACE_RE = re.compile(r"\s+")
-ACCENT_RE = re.compile(r"[áéíóúñü]")
 
 
 def normalize_language_code(value: object) -> Optional[str]:
@@ -108,23 +41,25 @@ def _iter_strings(values: Iterable[object]) -> Iterable[str]:
 
 
 def detect_language_from_text(text: str, min_confidence: float = 0.70) -> Tuple[Optional[str], float]:
-    tokens = [t.lower() for t in LANGUAGE_TOKEN_RE.findall(text)]
-    if len(tokens) < 8:
+    normalized_text = WHITESPACE_RE.sub(" ", _coerce_text(text)).strip()
+    if not normalized_text:
         return None, 0.0
 
-    english = sum(1 for token in tokens if token in ENGLISH_STOPWORDS)
-    spanish = sum(1 for token in tokens if token in SPANISH_STOPWORDS)
-    spanish += sum(1 for token in tokens if ACCENT_RE.search(token))
-
-    total_signal = english + spanish
-    if total_signal < 3:
+    try:
+        detections = detect_langs(normalized_text[:12000])
+    except LangDetectException:
+        return None, 0.0
+    except Exception:
         return None, 0.0
 
-    if english == spanish:
-        return None, 0.5
+    if not detections:
+        return None, 0.0
 
-    language = "en" if english > spanish else "es"
-    confidence = max(english, spanish) / total_signal
+    top_detection = detections[0]
+    language = normalize_language_code(top_detection.lang)
+    confidence = float(top_detection.prob)
+    if not language:
+        return None, confidence
     if confidence < min_confidence:
         return None, confidence
     return language, confidence
@@ -203,7 +138,7 @@ def _extract_text_from_soup(soup: BeautifulSoup) -> str:
     if description and description.attrs.get("content"):
         parts.append(_coerce_text(description.attrs.get("content")))
 
-    for tag in soup.find_all(["h1", "h2", "p"], limit=25):
+    for tag in soup.find_all(["h1", "h2", "p"], limit=35):
         text = tag.get_text(" ", strip=True)
         if text:
             parts.append(text)
@@ -220,7 +155,15 @@ def detect_language_from_html(
     if declared:
         return declared, "declared", 1.0
 
-    merged_text = " ".join(filter(None, [_extract_text_from_soup(soup), _coerce_text(response_text)[:5000]]))
+    merged_text = " ".join(
+        filter(
+            None,
+            [
+                _extract_text_from_soup(soup),
+                _coerce_text(response_text)[:12000],
+            ],
+        )
+    )
     detected, confidence = detect_language_from_text(merged_text, min_confidence=min_confidence)
     if detected:
         return detected, "text", confidence
@@ -233,9 +176,16 @@ def detect_language_from_recipe_payload(
     min_confidence: float = 0.70,
 ) -> Tuple[Optional[str], str, float]:
     for key in ["language", "recipeLanguage", "inLanguage", "orgLanguage", "originalLanguage"]:
-        normalized = normalize_language_code(payload.get(key))
-        if normalized:
-            return normalized, f"field:{key}", 1.0
+        value = payload.get(key)
+        if isinstance(value, list):
+            for item in value:
+                normalized = normalize_language_code(item)
+                if normalized:
+                    return normalized, f"field:{key}", 1.0
+        else:
+            normalized = normalize_language_code(value)
+            if normalized:
+                return normalized, f"field:{key}", 1.0
 
     text_chunks = []
     text_chunks.extend(
@@ -251,17 +201,26 @@ def detect_language_from_recipe_payload(
 
     ingredients = payload.get("recipeIngredient")
     if isinstance(ingredients, list):
-        for ingredient in ingredients[:80]:
+        for ingredient in ingredients[:120]:
             if isinstance(ingredient, dict):
-                text_chunks.extend(_iter_strings([ingredient.get("title"), ingredient.get("note"), ingredient.get("food")]))
+                text_chunks.extend(
+                    _iter_strings(
+                        [
+                            ingredient.get("title"),
+                            ingredient.get("note"),
+                            ingredient.get("food"),
+                            ingredient.get("text"),
+                        ]
+                    )
+                )
             else:
                 text_chunks.extend(_iter_strings([ingredient]))
 
     instructions = payload.get("recipeInstructions")
     if isinstance(instructions, list):
-        for step in instructions[:120]:
+        for step in instructions[:180]:
             if isinstance(step, dict):
-                text_chunks.extend(_iter_strings([step.get("text"), step.get("title")]))
+                text_chunks.extend(_iter_strings([step.get("text"), step.get("title"), step.get("name")]))
             else:
                 text_chunks.extend(_iter_strings([step]))
     elif instructions:

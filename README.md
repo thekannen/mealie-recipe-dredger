@@ -172,6 +172,7 @@ Useful tuning values:
 ### Language filtering and post-hoc cleanup
 
 - New imports are filtered by `TARGET_LANGUAGE` in verifier (default `en`).
+- Detection is generalized via `langdetect` (not limited to a fixed set like English/Spanish/Hindi).
 - Unknown-language pages are rejected by default via `LANGUAGE_DETECTION_STRICT=true`.
 - Existing imported recipes can be cleaned after the fact by running cleaner with:
 - `CLEANER_REMOVE_NON_TARGET_LANGUAGE=true`
