@@ -156,6 +156,7 @@ Primary required values in `.env`:
 
 Useful tuning values:
 - `DRY_RUN`
+- `CLEANER_RENAME_SALVAGE`
 - `TARGET_RECIPES_PER_SITE`
 - `SCAN_DEPTH`
 - `CRAWL_DELAY`

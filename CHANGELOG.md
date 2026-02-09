@@ -9,6 +9,7 @@ All notable changes to this project will be documented in this file.
 - **Docker Runtime Standardization:** Added `scripts/docker/entrypoint.sh` with `TASK`/`RUN_MODE` controls to mirror `mealie-organizer` conventions.
 - **Fork Documentation Refresh:** README/Setup guide rewritten to explicitly identify this repository as a fork and credit the original author (@D0rk4ce).
 - **Scheduled Runtime Mode:** Added `RUN_MODE=schedule` with weekly day/time controls and set compose defaults to Sunday at 03:00.
+- **Cleaner Salvage Renaming:** Cleaner can now keep salvageable `how-to` recipes and normalize names (instead of deleting them) when `CLEANER_RENAME_SALVAGE=true`.
 
 ### Fixed
 - **Entrypoint Cleanup:** Removed legacy root wrappers and now run exclusively via package entrypoints (`mealie-dredger`, `mealie-cleaner`) and Docker `TASK` routing.

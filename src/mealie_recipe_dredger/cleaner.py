@@ -6,16 +6,26 @@ import re
 import sys
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, List, Literal, Optional, Set, Tuple
 from urllib.parse import urlparse
 
 import requests
 
-from .config import DATA_DIR, MEALIE_API_TOKEN, MEALIE_ENABLED, MEALIE_URL
+from .config import (
+    DATA_DIR,
+    HOW_TO_COOK_REGEX,
+    LISTICLE_REGEX,
+    LISTICLE_TITLE_REGEX,
+    MEALIE_API_TOKEN,
+    MEALIE_ENABLED,
+    MEALIE_URL,
+    NUMBERED_COLLECTION_REGEX,
+)
 from .logging_utils import configure_logging
 
 DRY_RUN = os.getenv("DRY_RUN", "true").lower() == "true"
 MAX_WORKERS = int(os.getenv("MAX_WORKERS", 2))
+CLEANER_RENAME_SALVAGE = os.getenv("CLEANER_RENAME_SALVAGE", "true").lower() == "true"
 REJECT_FILE = DATA_DIR / "rejects.json"
 VERIFIED_FILE = DATA_DIR / "verified.json"
 
@@ -50,13 +60,9 @@ HIGH_RISK_KEYWORDS = [
     "lose weight",
 ]
 
-LISTICLE_REGEX = re.compile(
-    r"^(\\d+)\\s+(best|top|must|favorite|easy|healthy|quick|ways|things)",
-    re.IGNORECASE,
-)
-
 logger = logging.getLogger("cleaner")
 IntegrityResult = Tuple[str, str, str, Optional[str]]
+CleanerAction = Literal["keep", "rename", "delete"]
 
 
 def _as_optional_str(value: object) -> Optional[str]:
@@ -150,26 +156,122 @@ def delete_mealie_recipe(
         verified.remove(slug)
 
 
-def is_junk_content(name: str, url: Optional[str]) -> bool:
-    if not url:
-        return False
+def _slug_fallback(url: Optional[str], slug: Optional[str]) -> str:
+    slug_text = (slug or "").strip().lower()
+    if slug_text:
+        return slug_text
 
-    try:
-        slug = urlparse(url).path.strip("/").split("/")[-1].lower()
-    except Exception:
-        slug = ""
+    if url:
+        try:
+            return urlparse(url).path.strip("/").split("/")[-1].lower()
+        except Exception:
+            return ""
 
+    return ""
+
+
+def normalize_recipe_name(candidate: str) -> str:
+    text = re.sub(r"[-_]+", " ", candidate or "").strip()
+    text = re.sub(r"\s+", " ", text)
+    text = re.sub(r"^(recipe for)\s+", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"^(how to)\s+", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"^(cook|make)\s+", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"\b(recipe)\b$", "", text, flags=re.IGNORECASE).strip()
+    text = re.sub(r"\s+", " ", text)
+    return text.title()
+
+
+def suggest_salvage_name(name: str, slug: Optional[str]) -> Optional[str]:
+    original = (name or "").strip()
+    if not original:
+        return None
+
+    cleaned_from_name = normalize_recipe_name(original)
+    if cleaned_from_name and cleaned_from_name.lower() != original.lower():
+        return cleaned_from_name
+
+    slug_text = _slug_fallback(None, slug)
+    if slug_text:
+        cleaned_from_slug = normalize_recipe_name(slug_text)
+        if cleaned_from_slug and cleaned_from_slug.lower() != original.lower():
+            return cleaned_from_slug
+
+    return None
+
+
+def classify_recipe_action(name: str, url: Optional[str], slug: Optional[str] = None) -> Tuple[CleanerAction, str, Optional[str]]:
     name_l = (name or "").lower()
+    slug_text = _slug_fallback(url, slug)
+    normalized_slug = re.sub(r"[-_]+", " ", slug_text).strip()
+
+    if HOW_TO_COOK_REGEX.search(normalized_slug) or HOW_TO_COOK_REGEX.search(name_l):
+        if CLEANER_RENAME_SALVAGE:
+            new_name = suggest_salvage_name(name, slug_text or None)
+            if new_name:
+                return "rename", "How-to naming cleanup", new_name
+        return "delete", "How-to article", None
 
     for keyword in HIGH_RISK_KEYWORDS:
-        if keyword.replace(" ", "-") in slug or keyword in name_l:
-            return True
+        if keyword in normalized_slug or keyword in name_l:
+            return "delete", f"High-risk keyword: {keyword}", None
 
-    if LISTICLE_REGEX.match(slug) or LISTICLE_REGEX.match(name_l):
+    if (
+        LISTICLE_REGEX.search(normalized_slug)
+        or NUMBERED_COLLECTION_REGEX.search(normalized_slug)
+        or LISTICLE_REGEX.search(name_l)
+        or NUMBERED_COLLECTION_REGEX.search(name_l)
+        or LISTICLE_TITLE_REGEX.search(normalized_slug)
+        or LISTICLE_TITLE_REGEX.search(name_l)
+    ):
+        return "delete", "Listicle/roundup", None
+
+    if url and any(x in url.lower() for x in ["privacy-policy", "contact", "about-us", "login", "cart"]):
+        return "delete", "Utility/non-recipe page", None
+
+    return "keep", "", None
+
+
+def is_junk_content(name: str, url: Optional[str], slug: Optional[str] = None) -> bool:
+    action, _, _ = classify_recipe_action(name, url, slug)
+    return action == "delete"
+
+
+def rename_mealie_recipe(slug: str, old_name: str, new_name: str) -> bool:
+    if not new_name or old_name.strip().lower() == new_name.strip().lower():
         return True
 
-    if any(x in url.lower() for x in ["privacy-policy", "contact", "about-us", "login", "cart"]):
+    if DRY_RUN:
+        logger.info(f" [DRY RUN] Would rename in Mealie: '{old_name}' -> '{new_name}'")
         return True
+
+    headers = {"Authorization": f"Bearer {MEALIE_API_TOKEN}"}
+    payload = {"name": new_name}
+
+    for method in ("patch", "put"):
+        for attempt in range(3):
+            try:
+                if method == "patch":
+                    response = requests.patch(f"{MEALIE_URL}/api/recipes/{slug}", headers=headers, json=payload, timeout=10)
+                else:
+                    response = requests.put(f"{MEALIE_URL}/api/recipes/{slug}", headers=headers, json=payload, timeout=10)
+
+                if response.status_code in [200, 201]:
+                    logger.info(f"✏️ Renamed in Mealie: '{old_name}' -> '{new_name}'")
+                    return True
+
+                if response.status_code in [404, 405]:
+                    break
+
+                if attempt == 2:
+                    logger.warning(
+                        f"Rename failed for '{old_name}' ({slug}) via {method.upper()}: "
+                        f"HTTP {response.status_code} {response.text[:180]}"
+                    )
+                time.sleep(1)
+            except Exception as exc:
+                if attempt == 2:
+                    logger.warning(f"Rename error for '{old_name}' ({slug}) via {method.upper()}: {exc}")
+                time.sleep(1)
 
     return False
 
@@ -255,10 +357,15 @@ def run_cleaner() -> int:
             logger.debug(f"Skipping recipe with missing slug: {name}")
             continue
 
-        if is_junk_content(name, url):
-            delete_mealie_recipe(slug, name, "JUNK CONTENT", rejects, verified, url)
-        else:
-            clean_tasks.append(recipe)
+        action, reason, new_name = classify_recipe_action(name, url, slug)
+        if action == "delete":
+            delete_mealie_recipe(slug, name, reason or "JUNK CONTENT", rejects, verified, url)
+            continue
+
+        if action == "rename" and new_name:
+            rename_mealie_recipe(slug, name, new_name)
+
+        clean_tasks.append(recipe)
 
     logger.info(f"--- Phase 2: Deep Integrity Scan (Checking {len(clean_tasks)} recipes) ---")
     with concurrent.futures.ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:

@@ -42,6 +42,8 @@ docker compose run --rm -e TASK=cleaner -e RUN_MODE=once mealie-recipe-dredger
 
 If you want live deletion, set `DRY_RUN=false` in `.env` and rerun.
 
+To keep salvageable entries and clean names instead of deleting them (for example `How to Cook ...`), keep `CLEANER_RENAME_SALVAGE=true` in `.env`.
+
 ## 5. Runtime controls
 
 Supported container env vars:

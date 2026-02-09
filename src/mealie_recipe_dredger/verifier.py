@@ -7,7 +7,10 @@ from bs4 import BeautifulSoup
 
 from .config import (
     BAD_KEYWORDS,
+    HOW_TO_COOK_REGEX,
     LISTICLE_REGEX,
+    LISTICLE_TITLE_REGEX,
+    NUMBERED_COLLECTION_REGEX,
     NON_RECIPE_EXTENSIONS,
     NON_RECIPE_PATH_HINTS,
     TRANSIENT_HTTP_CODES,
@@ -42,17 +45,28 @@ class RecipeVerifier:
         try:
             path = urlparse(url).path
             slug = path.strip("/").split("/")[-1].lower()
+            normalized_slug = re.sub(r"[-_]+", " ", slug)
 
-            if LISTICLE_REGEX.search(slug):
+            if HOW_TO_COOK_REGEX.search(normalized_slug):
+                return "How-to article"
+
+            if LISTICLE_REGEX.search(normalized_slug) or NUMBERED_COLLECTION_REGEX.search(normalized_slug):
                 return f"Listicle detected: {slug}"
 
             for keyword in BAD_KEYWORDS:
-                if keyword in slug:
+                if keyword in normalized_slug:
                     return f"Bad keyword: {keyword}"
 
             if soup:
                 title = soup.title.string.lower() if soup.title and soup.title.string else ""
-                if "best recipes" in title or "top 10" in title:
+                if HOW_TO_COOK_REGEX.search(title):
+                    return "How-to title"
+                if (
+                    LISTICLE_TITLE_REGEX.search(title)
+                    or NUMBERED_COLLECTION_REGEX.search(title)
+                    or "best recipes" in title
+                    or "top 10" in title
+                ):
                     return "Listicle title"
 
         except Exception:

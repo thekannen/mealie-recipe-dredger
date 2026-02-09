@@ -65,7 +65,22 @@ NON_RECIPE_PATH_HINTS = (
 )
 
 LISTICLE_REGEX = re.compile(
-    r"(\\d+)-(best|top|must|favorite|easy|healthy|quick|ways|things)",
+    r"\b(top|best)\b.*\b(recipes|meals|dishes|ideas|desserts|appetizers|snacks|soups|salads|sides|cocktails|drinks)\b",
+    re.IGNORECASE,
+)
+
+NUMBERED_COLLECTION_REGEX = re.compile(
+    r"^\s*\d{1,3}\b.*\b(recipes|meals|dishes|ideas|desserts|appetizers|snacks|soups|salads|sides|cocktails|drinks)\b",
+    re.IGNORECASE,
+)
+
+LISTICLE_TITLE_REGEX = re.compile(
+    r"(\b(top|best)\b|\b\d{1,3}\b).*\b(recipes|meals|dishes|ideas|desserts|appetizers|snacks|soups|salads|sides|cocktails|drinks)\b",
+    re.IGNORECASE,
+)
+
+HOW_TO_COOK_REGEX = re.compile(
+    r"^how\s+to\s+(cook|make)\b",
     re.IGNORECASE,
 )
 
