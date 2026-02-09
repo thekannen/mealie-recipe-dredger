@@ -71,8 +71,12 @@ docker compose logs -f mealie-recipe-dredger
 Docker entrypoint supports:
 - `TASK=dredger` (default service behavior)
 - `TASK=cleaner`
-- `RUN_MODE=once` (default)
+- `RUN_MODE=once` (entrypoint fallback if unset)
 - `RUN_MODE=loop` with `RUN_INTERVAL_SECONDS=<int>`
+- `RUN_MODE=schedule` with:
+- `RUN_SCHEDULE_DAY=<1-7>` (`1=Mon`, `7=Sun`)
+- `RUN_SCHEDULE_TIME=<HH:MM>` (24-hour)
+- Compose default for `mealie-recipe-dredger`: Sunday `03:00` (`RUN_MODE=schedule`, `RUN_SCHEDULE_DAY=7`, `RUN_SCHEDULE_TIME=03:00`)
 
 Examples:
 
@@ -82,6 +86,9 @@ docker compose run --rm -e TASK=dredger -e RUN_MODE=once mealie-recipe-dredger
 
 # run dredger in loop every 6 hours
 docker compose run --rm -e TASK=dredger -e RUN_MODE=loop -e RUN_INTERVAL_SECONDS=21600 mealie-recipe-dredger
+
+# run dredger every Sunday at 03:00
+docker compose run --rm -e TASK=dredger -e RUN_MODE=schedule -e RUN_SCHEDULE_DAY=7 -e RUN_SCHEDULE_TIME=03:00 mealie-recipe-dredger
 
 # run cleaner once
 docker compose run --rm -e TASK=cleaner -e RUN_MODE=once mealie-recipe-dredger

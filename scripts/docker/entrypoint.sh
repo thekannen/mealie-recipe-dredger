@@ -4,6 +4,8 @@ set -euo pipefail
 TASK="${TASK:-dredger}"
 RUN_MODE="${RUN_MODE:-once}"
 RUN_INTERVAL_SECONDS="${RUN_INTERVAL_SECONDS:-21600}"
+RUN_SCHEDULE_DAY="${RUN_SCHEDULE_DAY:-7}"
+RUN_SCHEDULE_TIME="${RUN_SCHEDULE_TIME:-03:00}"
 
 run_task() {
   case "$TASK" in
@@ -20,6 +22,36 @@ run_task() {
   esac
 }
 
+seconds_until_next_schedule() {
+  if ! [[ "$RUN_SCHEDULE_DAY" =~ ^[1-7]$ ]]; then
+    echo "[error] RUN_SCHEDULE_DAY must be 1-7 (1=Mon, 7=Sun)."
+    exit 1
+  fi
+
+  if ! [[ "$RUN_SCHEDULE_TIME" =~ ^([01][0-9]|2[0-3]):[0-5][0-9]$ ]]; then
+    echo "[error] RUN_SCHEDULE_TIME must be HH:MM in 24-hour format."
+    exit 1
+  fi
+
+  local now_epoch current_day today_date target_today_epoch days_ahead next_epoch
+  now_epoch="$(date +%s)"
+  current_day="$(date +%u)"
+  today_date="$(date +%F)"
+  target_today_epoch="$(date -d "${today_date} ${RUN_SCHEDULE_TIME}:00" +%s)"
+  days_ahead=$((RUN_SCHEDULE_DAY - current_day))
+
+  if [ "$days_ahead" -lt 0 ]; then
+    days_ahead=$((days_ahead + 7))
+  fi
+
+  if [ "$days_ahead" -eq 0 ] && [ "$now_epoch" -ge "$target_today_epoch" ]; then
+    days_ahead=7
+  fi
+
+  next_epoch=$((target_today_epoch + days_ahead * 86400))
+  echo $((next_epoch - now_epoch))
+}
+
 if [ "$RUN_MODE" = "loop" ]; then
   if ! [[ "$RUN_INTERVAL_SECONDS" =~ ^[0-9]+$ ]]; then
     echo "[error] RUN_INTERVAL_SECONDS must be an integer."
@@ -34,9 +66,21 @@ if [ "$RUN_MODE" = "loop" ]; then
   done
 fi
 
-if [ "$RUN_MODE" != "once" ]; then
-  echo "[error] RUN_MODE must be either 'once' or 'loop'."
-  exit 1
+if [ "$RUN_MODE" = "schedule" ]; then
+  echo "[start] Schedule mode enabled (task=$TASK, day=$RUN_SCHEDULE_DAY, time=$RUN_SCHEDULE_TIME)"
+  while true; do
+    sleep_seconds="$(seconds_until_next_schedule)"
+    next_run_human="$(date -d "@$(( $(date +%s) + sleep_seconds ))" "+%Y-%m-%d %H:%M:%S %Z")"
+    echo "[sleep] Waiting ${sleep_seconds}s until ${next_run_human}"
+    sleep "$sleep_seconds"
+    run_task
+  done
 fi
 
-run_task
+if [ "$RUN_MODE" = "once" ]; then
+  run_task
+  exit 0
+fi
+
+echo "[error] RUN_MODE must be one of: once, loop, schedule."
+exit 1

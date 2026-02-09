@@ -46,13 +46,23 @@ If you want live deletion, set `DRY_RUN=false` in `.env` and rerun.
 
 Supported container env vars:
 - `TASK=dredger|cleaner`
-- `RUN_MODE=once|loop`
+- `RUN_MODE=once|loop|schedule`
 - `RUN_INTERVAL_SECONDS=<int>`
+- `RUN_SCHEDULE_DAY=<1-7>` (`1=Mon`, `7=Sun`)
+- `RUN_SCHEDULE_TIME=<HH:MM>` (24-hour)
+
+Current compose default for `mealie-recipe-dredger`: Sunday `03:00`.
 
 Example loop mode:
 
 ```bash
 docker compose run --rm -e TASK=dredger -e RUN_MODE=loop -e RUN_INTERVAL_SECONDS=21600 mealie-recipe-dredger
+```
+
+Example weekly schedule (Sunday 03:00):
+
+```bash
+docker compose run --rm -e TASK=dredger -e RUN_MODE=schedule -e RUN_SCHEDULE_DAY=7 -e RUN_SCHEDULE_TIME=03:00 mealie-recipe-dredger
 ```
 
 ## Troubleshooting

@@ -9,8 +9,9 @@ services:
       - .env
     environment:
       TASK: dredger
-      RUN_MODE: once
-      RUN_INTERVAL_SECONDS: 21600
+      RUN_MODE: schedule
+      RUN_SCHEDULE_DAY: 7
+      RUN_SCHEDULE_TIME: "03:00"
     volumes:
       - ./data:/app/data
       - ./sites.json:/app/sites.json:ro
