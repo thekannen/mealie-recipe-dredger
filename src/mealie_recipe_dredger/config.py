@@ -80,7 +80,6 @@ NON_RECIPE_PATH_HINTS = (
     "/tag/",
     "/author/",
     "/feed/",
-    "/g/home/r/",
 )
 
 LISTICLE_REGEX = re.compile(
@@ -126,9 +125,6 @@ BAD_KEYWORDS = [
     "shop",
     "store",
     "product",
-    "we tried",
-    "clear winner",
-    "taste test",
 ]
 
 
