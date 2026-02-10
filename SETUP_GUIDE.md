@@ -18,10 +18,16 @@ Edit `.env` and set:
 
 ## 2. Optional site customization
 
-Edit `data/sites.json` on host.
+Create or update your runtime sites file on host:
 
-At first start, the container seeds `data/sites.json` from bundled `/app/sites.json` if it does not exist yet.
-After that, updates from git do not overwrite your runtime site list.
+```bash
+cp custom_sites.json data/sites.json
+# or edit data/sites.json directly
+```
+
+When `data/sites.json` exists, entrypoint uses `SITES=/app/data/sites.json`.
+Because it lives under `data/`, updates from git do not overwrite it.
+If you do nothing here, `scripts/docker/update.sh` seeds `data/sites.json` once from repo `sites.json` when missing.
 
 ## 3. Deploy/update
 
@@ -85,6 +91,20 @@ Example weekly schedule (Sunday 03:00):
 
 ```bash
 docker compose run --rm -e TASK=dredger -e RUN_MODE=schedule -e RUN_SCHEDULE_DAY=7 -e RUN_SCHEDULE_TIME=03:00 mealie-recipe-dredger
+```
+
+## 6. One-time cleanup for removed domains
+
+Dry run to see what would be removed when comparing your current and baseline site files:
+
+```bash
+python3 scripts/oneoff/prune_by_sites.py --sites-file custom_sites.json --baseline-sites-file sites.json
+```
+
+Apply deletions:
+
+```bash
+python3 scripts/oneoff/prune_by_sites.py --sites-file custom_sites.json --baseline-sites-file sites.json --apply
 ```
 
 ## Troubleshooting

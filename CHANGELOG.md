@@ -3,16 +3,22 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [1.0.0-beta.14] - 2026-02-10
+
 ### Added
 - **Parallel Import Workers:** Added `IMPORT_WORKERS` to allow concurrent Mealie import requests for better throughput on slow `/api/recipes/create/url` responses.
+- **One-Off Domain Cleanup Tool:** Added `scripts/oneoff/prune_by_sites.py` to prune existing imports by source-domain policy, including baseline-diff mode (`--baseline-sites-file`) to remove only domains removed from your sites list.
 
 ### Changed
 - **Import Precheck Thread Safety:** Protected duplicate source-url precheck state with a lock to safely support concurrent imports.
 - **Mealie Import Throttling:** Removed crawler-domain delay throttling from Mealie API import calls; crawl delay remains for scraped sites.
-- **Docs:** Updated README and setup guide with performance tuning guidance for `IMPORT_WORKERS` and `MEALIE_IMPORT_TIMEOUT`.
-- **Runtime Sites Persistence:** Docker runtime now defaults `SITES` to `/app/data/sites.json` and auto-seeds it once from bundled `sites.json`, preventing update pulls from overwriting active site customizations.
 - **Fail-Fast Site Aborts:** Added `SITE_IMPORT_FAILURE_THRESHOLD` so repeated Mealie HTTP 5xx import failures abort a bad site early instead of burning an entire site quota.
 - **Retry Queue Finalization:** Retry queue entries that hit max attempts are now rejected immediately in the same run (instead of waiting for another cycle).
+- **Runtime Sites Persistence:** Docker runtime now prefers `SITES=/app/data/sites.json` when present, preventing update pulls from overwriting active site customizations.
+- **Docker Build Robustness:** Image build no longer hard-requires a repo `sites.json` file.
+- **Runtime Sites Fallback:** If no runtime sites file exists, entrypoint now falls back cleanly to built-in defaults instead of producing empty targets.
+- **First-Deploy Sites Seeding:** `scripts/docker/update.sh` now seeds `data/sites.json` once from repo `sites.json` when missing.
+- **Docs:** Updated README and setup guide with current runtime-sites behavior, performance tuning, and one-off cleanup workflow.
 
 ## [1.0.0-beta.13] - 2026-02-09
 

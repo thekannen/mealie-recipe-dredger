@@ -57,9 +57,16 @@ cp .env.example .env
 # edit .env with MEALIE_URL + MEALIE_API_TOKEN
 ```
 
-3. Optional: edit `data/sites.json` on host.
-On first container start, it is auto-seeded from bundled `sites.json` if missing.
-It then lives under `data/` so git updates do not overwrite it.
+3. Optional: set your runtime sites file on host:
+
+```bash
+cp custom_sites.json data/sites.json
+# or edit data/sites.json directly
+```
+
+If `data/sites.json` exists, Docker runtime uses it via `SITES=/app/data/sites.json`.
+Because it lives under `data/`, git updates do not overwrite it.
+If you skip this step, `./scripts/docker/update.sh` seeds `data/sites.json` once from repo `sites.json` when missing.
 
 4. Deploy/update:
 
@@ -196,6 +203,20 @@ docker compose run --rm -e TASK=cleaner -e RUN_MODE=once -e DRY_RUN=false mealie
 - Cleaner: `CLEANER_DEDUPE_BY_SOURCE=true` removes duplicate recipes that share the same canonical source URL.
 - Name collisions from different sites are not auto-deleted solely by title; source URL is used as the safe dedupe key.
 
+### One-time domain cleanup
+
+Use the one-off script to remove already-imported recipes from domains you removed in your custom list:
+
+```bash
+python3 scripts/oneoff/prune_by_sites.py --sites-file custom_sites.json --baseline-sites-file sites.json
+```
+
+Apply deletions:
+
+```bash
+python3 scripts/oneoff/prune_by_sites.py --sites-file custom_sites.json --baseline-sites-file sites.json --apply
+```
+
 ### Performance tuning
 
 - Import throughput is usually bounded by Mealie's `/api/recipes/create/url` latency.
@@ -208,6 +229,9 @@ Site source priority:
 2. `SITES` env override (path or comma-separated URLs)
 3. local `sites.json`
 4. built-in defaults
+
+Docker note:
+- The entrypoint prefers `/app/data/sites.json` when present.
 
 ## Notes
 
