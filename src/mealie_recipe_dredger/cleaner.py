@@ -23,6 +23,7 @@ from .config import (
     LISTICLE_TITLE_REGEX,
     MEALIE_API_TOKEN,
     MEALIE_ENABLED,
+    MEALIE_IMPORT_TIMEOUT,
     MEALIE_URL,
     NON_RECIPE_DIGEST_REGEX,
     NUMBERED_COLLECTION_REGEX,
@@ -35,6 +36,10 @@ from .url_utils import canonicalize_url, has_numeric_suffix, numeric_suffix_valu
 DRY_RUN = os.getenv("DRY_RUN", "true").lower() == "true"
 MAX_WORKERS = int(os.getenv("MAX_WORKERS", 2))
 CLEANER_RENAME_SALVAGE = os.getenv("CLEANER_RENAME_SALVAGE", "true").lower() == "true"
+CLEANER_API_TIMEOUT = max(5, int(os.getenv("CLEANER_API_TIMEOUT", str(MEALIE_IMPORT_TIMEOUT))))
+CLEANER_API_RETRIES = max(1, int(os.getenv("CLEANER_API_RETRIES", "3")))
+CLEANER_RECIPES_PER_PAGE = max(50, int(os.getenv("CLEANER_RECIPES_PER_PAGE", "250")))
+CLEANER_PAGE_RETRY_DELAY = max(0.0, float(os.getenv("CLEANER_PAGE_RETRY_DELAY", "1.5")))
 REJECT_FILE = DATA_DIR / "rejects.json"
 VERIFIED_FILE = DATA_DIR / "verified.json"
 
@@ -157,34 +162,74 @@ def get_mealie_recipes() -> List[Dict[str, Any]]:
     headers = {"Authorization": f"Bearer {MEALIE_API_TOKEN}"}
     recipes: List[Dict[str, Any]] = []
     page = 1
+    terminated_due_error = False
     logger.info(f"Scanning Mealie library at {MEALIE_URL}...")
     while True:
-        try:
-            response = requests.get(
-                f"{MEALIE_URL}/api/recipes?page={page}&perPage=1000",
-                headers=headers,
-                timeout=10,
-            )
+        payload: Optional[Dict[str, Any]] = None
+        request_error: Optional[str] = None
+
+        for attempt in range(1, CLEANER_API_RETRIES + 1):
+            try:
+                response = requests.get(
+                    f"{MEALIE_URL}/api/recipes?page={page}&perPage={CLEANER_RECIPES_PER_PAGE}",
+                    headers=headers,
+                    timeout=CLEANER_API_TIMEOUT,
+                )
+            except Exception as exc:
+                request_error = str(exc)
+                if attempt < CLEANER_API_RETRIES:
+                    logger.warning(
+                        f"Error fetching Mealie page {page} "
+                        f"(attempt {attempt}/{CLEANER_API_RETRIES}): {exc}"
+                    )
+                    time.sleep(CLEANER_PAGE_RETRY_DELAY)
+                    continue
+                break
+
             if response.status_code != 200:
-                break
-            payload = response.json()
-            if not isinstance(payload, dict):
+                request_error = f"HTTP {response.status_code}"
+                if response.status_code >= 500 and attempt < CLEANER_API_RETRIES:
+                    logger.warning(
+                        f"Transient error fetching Mealie page {page} "
+                        f"(attempt {attempt}/{CLEANER_API_RETRIES}): {request_error}"
+                    )
+                    time.sleep(CLEANER_PAGE_RETRY_DELAY)
+                    continue
                 break
 
-            raw_items = payload.get("items", [])
-            if not isinstance(raw_items, list):
+            raw_payload = response.json()
+            if not isinstance(raw_payload, dict):
+                request_error = "Invalid JSON payload"
                 break
 
-            items = [item for item in raw_items if isinstance(item, dict)]
-            if not items:
-                break
-            recipes.extend(items)
-            page += 1
-            if page % 5 == 0:
-                logger.debug(f"Fetched page {page - 1}...")
-        except Exception as exc:
-            logger.error(f"Error fetching Mealie recipes: {exc}")
+            payload = raw_payload
             break
+
+        if payload is None:
+            if request_error:
+                logger.error(f"Error fetching Mealie recipes page {page}: {request_error}")
+                terminated_due_error = True
+            break
+
+        raw_items = payload.get("items", [])
+        if not isinstance(raw_items, list):
+            terminated_due_error = True
+            logger.error(f"Malformed Mealie payload for page {page}: 'items' is not a list")
+            break
+
+        items = [item for item in raw_items if isinstance(item, dict)]
+        if not items:
+            break
+
+        recipes.extend(items)
+        page += 1
+        if page % 5 == 0:
+            logger.debug(f"Fetched page {page - 1}...")
+
+    if terminated_due_error:
+        logger.warning(
+            f"Mealie scan ended early at page {page}; cleaner will run on partial inventory ({len(recipes)} recipes)."
+        )
 
     logger.info(f"Total Mealie recipes found: {len(recipes)}")
     return recipes
@@ -209,9 +254,9 @@ def delete_mealie_recipe(
     deleted = False
 
     for target in targets:
-        for attempt in range(3):
+        for attempt in range(CLEANER_API_RETRIES):
             try:
-                response = requests.delete(target, headers=headers, timeout=10)
+                response = requests.delete(target, headers=headers, timeout=CLEANER_API_TIMEOUT)
                 if response.status_code == 200:
                     deleted = True
                     break
@@ -350,12 +395,16 @@ def classify_recipe_action(name: str, url: Optional[str], slug: Optional[str] = 
     name_l = (name or "").lower()
     slug_text = _slug_fallback(url, slug)
     normalized_slug = re.sub(r"[-_]+", " ", slug_text).strip()
+    slug_has_how_to = bool(HOW_TO_COOK_REGEX.search(normalized_slug))
+    name_has_how_to = bool(HOW_TO_COOK_REGEX.search(name_l))
 
-    if HOW_TO_COOK_REGEX.search(normalized_slug) or HOW_TO_COOK_REGEX.search(name_l):
+    if slug_has_how_to or name_has_how_to:
         if CLEANER_RENAME_SALVAGE:
             new_name = suggest_salvage_name(name, slug_text or None)
             if new_name:
                 return "rename", "How-to naming cleanup", new_name
+        if slug_has_how_to and not name_has_how_to:
+            return "keep", "How-to slug only with clean recipe title", None
         return "delete", "How-to article", None
 
     if NON_RECIPE_DIGEST_REGEX.search(normalized_slug) or NON_RECIPE_DIGEST_REGEX.search(name_l):
@@ -401,12 +450,12 @@ def rename_mealie_recipe(slug: str, old_name: str, new_name: str, recipe_id: Opt
 
     for target in targets:
         for method in ("patch", "put"):
-            for attempt in range(3):
+            for attempt in range(CLEANER_API_RETRIES):
                 try:
                     if method == "patch":
-                        response = requests.patch(target, headers=headers, json=payload, timeout=10)
+                        response = requests.patch(target, headers=headers, json=payload, timeout=CLEANER_API_TIMEOUT)
                     else:
-                        response = requests.put(target, headers=headers, json=payload, timeout=10)
+                        response = requests.put(target, headers=headers, json=payload, timeout=CLEANER_API_TIMEOUT)
 
                     if response.status_code in [200, 201]:
                         logger.info(f"✏️ Renamed in Mealie: '{old_name}' -> '{new_name}'")
@@ -505,15 +554,19 @@ def check_integrity(recipe: Dict[str, Any], verified: Set[str]) -> Optional[Inte
         headers = {"Authorization": f"Bearer {MEALIE_API_TOKEN}"}
         payload: Dict[str, Any] = {}
         for target in _build_recipe_resource_urls(slug, recipe_id):
-            response = requests.get(target, headers=headers, timeout=10)
-            if response.status_code == 200:
-                raw_payload = response.json()
-                if isinstance(raw_payload, dict):
-                    payload = raw_payload
+            for attempt in range(CLEANER_API_RETRIES):
+                response = requests.get(target, headers=headers, timeout=CLEANER_API_TIMEOUT)
+                if response.status_code == 200:
+                    raw_payload = response.json()
+                    if isinstance(raw_payload, dict):
+                        payload = raw_payload
+                    break
+                if response.status_code in [404, 405] or _is_no_result_error(response.status_code, response.text):
+                    break
+                if attempt + 1 < CLEANER_API_RETRIES:
+                    time.sleep(1)
+            if payload:
                 break
-            if response.status_code in [404, 405] or _is_no_result_error(response.status_code, response.text):
-                continue
-            break
 
         inst = payload.get("recipeInstructions")
 
