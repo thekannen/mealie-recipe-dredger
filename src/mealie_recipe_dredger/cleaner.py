@@ -24,6 +24,7 @@ from .config import (
     MEALIE_API_TOKEN,
     MEALIE_ENABLED,
     MEALIE_URL,
+    NON_RECIPE_DIGEST_REGEX,
     NUMBERED_COLLECTION_REGEX,
     TARGET_LANGUAGE,
 )
@@ -64,9 +65,20 @@ HIGH_RISK_KEYWORDS = [
     "holiday guide",
     "foods to try",
     "things to eat",
+    "we tried",
+    "clear winner",
+    "taste test",
     "detox water",
     "lose weight",
 ]
+
+INSTRUCTION_PLACEHOLDERS = (
+    "could not detect instructions",
+    "could not detect instruction",
+    "instructions unavailable",
+    "instruction unavailable",
+    "no instructions",
+)
 
 logger = logging.getLogger("cleaner")
 IntegrityResult = Tuple[str, str, str, Optional[str]]
@@ -346,6 +358,9 @@ def classify_recipe_action(name: str, url: Optional[str], slug: Optional[str] = 
                 return "rename", "How-to naming cleanup", new_name
         return "delete", "How-to article", None
 
+    if NON_RECIPE_DIGEST_REGEX.search(normalized_slug) or NON_RECIPE_DIGEST_REGEX.search(name_l):
+        return "delete", "Digest/non-recipe post", None
+
     for keyword in HIGH_RISK_KEYWORDS:
         if keyword in normalized_slug or keyword in name_l:
             return "delete", f"High-risk keyword: {keyword}", None
@@ -415,26 +430,34 @@ def rename_mealie_recipe(slug: str, old_name: str, new_name: str, recipe_id: Opt
 
 
 def validate_instructions(inst: Any) -> bool:
+    def _has_valid_instruction_text(text: str) -> bool:
+        normalized = re.sub(r"\s+", " ", text).strip().lower()
+        if not normalized:
+            return False
+        return not any(marker in normalized for marker in INSTRUCTION_PLACEHOLDERS)
+
     if not inst:
         return False
 
     if isinstance(inst, str):
-        if len(inst.strip()) == 0:
-            return False
-        if "could not detect" in inst.lower():
-            return False
-        return True
+        return _has_valid_instruction_text(inst)
 
     if isinstance(inst, list):
-        if len(inst) == 0:
-            return False
         for step in inst:
-            text = step.get("text", "") if isinstance(step, dict) else str(step)
-            if text and len(text.strip()) > 0:
+            if validate_instructions(step):
                 return True
         return False
 
-    return True
+    if isinstance(inst, dict):
+        text = inst.get("text")
+        if isinstance(text, str) and _has_valid_instruction_text(text):
+            return True
+        nested = inst.get("itemListElement")
+        if nested is not None:
+            return validate_instructions(nested)
+        return False
+
+    return False
 
 
 def language_issue_for_payload(payload: dict[str, Any]) -> Optional[str]:

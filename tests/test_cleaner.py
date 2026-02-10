@@ -9,6 +9,7 @@ from mealie_recipe_dredger.cleaner import (
     is_junk_content,
     language_issue_for_payload,
     suggest_salvage_name,
+    validate_instructions,
 )
 
 
@@ -80,6 +81,26 @@ def test_classify_recipe_action_blocks_numbered_roundup():
     )
     assert action == "delete"
     assert reason == "Listicle/roundup"
+
+
+def test_classify_recipe_action_blocks_editorial_we_tried_title():
+    action, reason, _ = classify_recipe_action(
+        name="We Tried 15 Jars of Creamy Peanut Butter and There Was a Clear Winner",
+        url="https://www.foodandwine.com/best-peanut-butters-8721900",
+        slug="we-tried-15-jars-of-creamy-peanut-butter-and-there-was-a-clear-winner",
+    )
+    assert action == "delete"
+    assert reason == "High-risk keyword: we tried"
+
+
+def test_validate_instructions_rejects_placeholder_text_in_step_list():
+    instructions = [{"text": "Could not detect instructions"}]
+    assert not validate_instructions(instructions)
+
+
+def test_validate_instructions_accepts_nested_step_list_with_real_text():
+    instructions = [{"itemListElement": [{"text": "Whisk eggs with salt."}]}]
+    assert validate_instructions(instructions)
 
 
 def test_language_issue_for_payload_flags_spanish(monkeypatch):
