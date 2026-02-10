@@ -34,6 +34,17 @@ def test_prefilter_blocks_media_url_without_network_call():
     assert transient is False
 
 
+def test_prefilter_blocks_known_non_recipe_route_family():
+    verifier = RecipeVerifier(DummySession())
+    is_recipe, _soup, reason, transient = verifier.verify_recipe(
+        "https://example.com/g/home/r/we-tried-15-jars-of-creamy-peanut-butter-and-there-was-a-clear-winner"
+    )
+
+    assert is_recipe is False
+    assert reason == "Non-recipe path"
+    assert transient is False
+
+
 def test_paranoid_skip_blocks_listicle_slug():
     verifier = RecipeVerifier(DummySession())
     reason = verifier.is_paranoid_skip("https://example.com/28-best-keto-air-fryer-recipes/")
@@ -64,6 +75,14 @@ def test_paranoid_skip_blocks_digest_slug():
     verifier = RecipeVerifier(DummySession())
     reason = verifier.is_paranoid_skip("https://example.com/friday-finds-4-10-15/")
     assert reason == "Digest/non-recipe post"
+
+
+def test_paranoid_skip_blocks_we_tried_roundup_slug():
+    verifier = RecipeVerifier(DummySession())
+    reason = verifier.is_paranoid_skip(
+        "https://example.com/we-tried-15-jars-of-creamy-peanut-butter-and-there-was-a-clear-winner/"
+    )
+    assert reason == "Bad keyword: we tried"
 
 
 def test_verify_recipe_rejects_weak_recipe_schema():
