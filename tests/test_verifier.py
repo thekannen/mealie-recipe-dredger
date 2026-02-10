@@ -60,12 +60,36 @@ def test_paranoid_skip_allows_single_recipe_slug():
     assert reason is None
 
 
+def test_paranoid_skip_blocks_digest_slug():
+    verifier = RecipeVerifier(DummySession())
+    reason = verifier.is_paranoid_skip("https://example.com/friday-finds-4-10-15/")
+    assert reason == "Digest/non-recipe post"
+
+
+def test_verify_recipe_rejects_weak_recipe_schema():
+    html = """
+    <html lang="en">
+      <head>
+        <title>Not really a recipe post</title>
+        <script type="application/ld+json">{"@type":"Recipe","name":"Post Teaser"}</script>
+      </head>
+      <body><p>This is a roundup post.</p></body>
+    </html>
+    """
+    verifier = RecipeVerifier(DummyHttpSession(html))
+    is_recipe, _soup, reason, transient = verifier.verify_recipe("https://example.com/not-recipe")
+
+    assert is_recipe is False
+    assert reason == "Weak recipe schema"
+    assert transient is False
+
+
 def test_verify_recipe_rejects_spanish_page():
     html = """
     <html lang="es">
       <head>
         <title>Tortilla Espanola</title>
-        <script type="application/ld+json">{"@type":"Recipe"}</script>
+        <script type="application/ld+json">{"@type":"Recipe","recipeIngredient":["egg"],"recipeInstructions":"Mix and cook."}</script>
       </head>
       <body></body>
     </html>
@@ -83,7 +107,7 @@ def test_verify_recipe_allows_english_page():
     <html lang="en">
       <head>
         <title>Lemon Chicken Recipe</title>
-        <script type="application/ld+json">{"@type":"Recipe"}</script>
+        <script type="application/ld+json">{"@type":"Recipe","recipeIngredient":["chicken"],"recipeInstructions":"Bake."}</script>
       </head>
       <body></body>
     </html>
@@ -101,7 +125,7 @@ def test_verify_recipe_rejects_spanish_text_without_lang_attribute():
     <html>
       <head>
         <title>Receta de pollo al horno</title>
-        <script type="application/ld+json">{"@type":"Recipe"}</script>
+        <script type="application/ld+json">{"@type":"Recipe","recipeIngredient":["pollo"],"recipeInstructions":"Hornear."}</script>
       </head>
       <body>
         <p>Esta receta es facil y deliciosa para toda la familia.</p>

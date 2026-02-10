@@ -97,6 +97,20 @@ LISTICLE_TITLE_REGEX = re.compile(
     re.IGNORECASE,
 )
 
+NON_RECIPE_DIGEST_REGEX = re.compile(
+    r"\b("
+    r"friday\s*finds?|"
+    r"sunday\s*stuff|"
+    r"monthly\s*report|"
+    r"coming\s*soon|"
+    r"adventures?|"
+    r"food\s*guide|"
+    r"what\s*and\s*where\s*to\s*eat|"
+    r"totoro\s*week"
+    r")\b",
+    re.IGNORECASE,
+)
+
 HOW_TO_COOK_REGEX = re.compile(
     r"^how\s+to\s+(cook|make)\b",
     re.IGNORECASE,

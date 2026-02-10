@@ -1,5 +1,6 @@
+import json
 import re
-from typing import Optional, Tuple
+from typing import Any, Optional, Tuple
 from urllib.parse import urlparse
 
 import requests
@@ -13,6 +14,7 @@ from .config import (
     LANGUAGE_MIN_CONFIDENCE,
     LISTICLE_REGEX,
     LISTICLE_TITLE_REGEX,
+    NON_RECIPE_DIGEST_REGEX,
     NUMBERED_COLLECTION_REGEX,
     NON_RECIPE_EXTENSIONS,
     NON_RECIPE_PATH_HINTS,
@@ -55,6 +57,9 @@ class RecipeVerifier:
             if HOW_TO_COOK_REGEX.search(normalized_slug):
                 return "How-to article"
 
+            if NON_RECIPE_DIGEST_REGEX.search(normalized_slug):
+                return "Digest/non-recipe post"
+
             if LISTICLE_REGEX.search(normalized_slug) or NUMBERED_COLLECTION_REGEX.search(normalized_slug):
                 return f"Listicle detected: {slug}"
 
@@ -66,6 +71,8 @@ class RecipeVerifier:
                 title = soup.title.string.lower() if soup.title and soup.title.string else ""
                 if HOW_TO_COOK_REGEX.search(title):
                     return "How-to title"
+                if NON_RECIPE_DIGEST_REGEX.search(title):
+                    return "Digest/non-recipe title"
                 if (
                     LISTICLE_TITLE_REGEX.search(title)
                     or NUMBERED_COLLECTION_REGEX.search(title)
@@ -79,6 +86,85 @@ class RecipeVerifier:
 
         return None
 
+    def _is_recipe_type(self, value: Any) -> bool:
+        if isinstance(value, str):
+            return value.strip().lower() == "recipe"
+        if isinstance(value, list):
+            return any(self._is_recipe_type(item) for item in value)
+        return False
+
+    def _iter_json_ld_items(self, value: Any):
+        if isinstance(value, dict):
+            graph = value.get("@graph")
+            if isinstance(graph, list):
+                for entry in graph:
+                    yield from self._iter_json_ld_items(entry)
+            else:
+                yield value
+            return
+
+        if isinstance(value, list):
+            for entry in value:
+                yield from self._iter_json_ld_items(entry)
+
+    def _has_ingredients(self, value: Any) -> bool:
+        if isinstance(value, str):
+            return bool(value.strip())
+        if isinstance(value, list):
+            return any(isinstance(item, str) and item.strip() for item in value)
+        return False
+
+    def _has_instructions(self, value: Any) -> bool:
+        if isinstance(value, str):
+            return bool(value.strip())
+        if isinstance(value, list):
+            for item in value:
+                if isinstance(item, str) and item.strip():
+                    return True
+                if isinstance(item, dict):
+                    text = item.get("text")
+                    if isinstance(text, str) and text.strip():
+                        return True
+                    nested = item.get("itemListElement")
+                    if self._has_instructions(nested):
+                        return True
+        if isinstance(value, dict):
+            text = value.get("text")
+            if isinstance(text, str) and text.strip():
+                return True
+            nested = value.get("itemListElement")
+            if self._has_instructions(nested):
+                return True
+        return False
+
+    def _recipe_schema_signal(self, soup: BeautifulSoup) -> Tuple[bool, bool]:
+        """Return (has_recipe_type, has_strong_recipe_payload)."""
+        has_recipe_type = False
+        strong_payload = False
+
+        for script in soup.find_all("script", attrs={"type": "application/ld+json"}):
+            raw = script.string or script.get_text() or ""
+            raw = raw.strip()
+            if not raw:
+                continue
+            try:
+                payload = json.loads(raw)
+            except json.JSONDecodeError:
+                continue
+
+            for item in self._iter_json_ld_items(payload):
+                if not isinstance(item, dict):
+                    continue
+                if not self._is_recipe_type(item.get("@type")):
+                    continue
+
+                has_recipe_type = True
+                if self._has_ingredients(item.get("recipeIngredient")) or self._has_instructions(item.get("recipeInstructions")):
+                    strong_payload = True
+                    return has_recipe_type, strong_payload
+
+        return has_recipe_type, strong_payload
+
     def verify_recipe(self, url: str) -> Tuple[bool, Optional[BeautifulSoup], Optional[str], bool]:
         pre_filtered_reason = self.pre_filter_candidate(url)
         if pre_filtered_reason:
@@ -90,22 +176,14 @@ class RecipeVerifier:
                 is_transient = response.status_code in TRANSIENT_HTTP_CODES
                 return False, None, f"HTTP {response.status_code}", is_transient
 
-            is_recipe = False
-            soup = None
+            soup = BeautifulSoup(response.content, "lxml")
+            has_recipe_type, strong_recipe_payload = self._recipe_schema_signal(soup)
+            has_recipe_card = bool(soup.find(class_=RECIPE_CLASS_PATTERN))
 
-            if '"@type":"Recipe"' in response.text or '"@type": "Recipe"' in response.text:
-                is_recipe = True
-
-            if not is_recipe:
-                soup = BeautifulSoup(response.content, "lxml")
-                if soup.find(class_=RECIPE_CLASS_PATTERN):
-                    is_recipe = True
-
-            if not is_recipe:
+            if not strong_recipe_payload and not has_recipe_card:
+                if has_recipe_type:
+                    return False, soup, "Weak recipe schema", False
                 return False, soup, "No recipe detected", False
-
-            if soup is None:
-                soup = BeautifulSoup(response.content, "lxml")
 
             if LANGUAGE_FILTER_ENABLED and TARGET_LANGUAGE:
                 detected_language, _source, _confidence = detect_language_from_html(
