@@ -12,17 +12,23 @@ initialize_runtime_sites() {
   mkdir -p "$(dirname "$RUNTIME_SITES_FILE")"
 
   if [ -z "${SITES:-}" ]; then
-    export SITES="$RUNTIME_SITES_FILE"
-    echo "[init] SITES not set; defaulting to $SITES"
+    if [ -f "$RUNTIME_SITES_FILE" ]; then
+      export SITES="$RUNTIME_SITES_FILE"
+      echo "[init] SITES not set; using runtime sites file: $SITES"
+    elif [ -f /app/sites.json ]; then
+      cp /app/sites.json "$RUNTIME_SITES_FILE"
+      export SITES="$RUNTIME_SITES_FILE"
+      echo "[init] Seeded runtime sites file: $RUNTIME_SITES_FILE"
+      echo "[init] SITES not set; defaulting to $SITES"
+    else
+      echo "[warn] No runtime or bundled sites file found; using built-in defaults."
+    fi
+    return
   fi
 
-  if [ "$SITES" = "$RUNTIME_SITES_FILE" ] && [ ! -f "$RUNTIME_SITES_FILE" ]; then
-    if [ -f /app/sites.json ]; then
-      cp /app/sites.json "$RUNTIME_SITES_FILE"
-      echo "[init] Seeded runtime sites file: $RUNTIME_SITES_FILE"
-    else
-      echo "[warn] /app/sites.json not found; dredger will fall back to built-in defaults."
-    fi
+  if [ "$SITES" = "$RUNTIME_SITES_FILE" ] && [ ! -f "$RUNTIME_SITES_FILE" ] && [ -f /app/sites.json ]; then
+    cp /app/sites.json "$RUNTIME_SITES_FILE"
+    echo "[init] Seeded runtime sites file: $RUNTIME_SITES_FILE"
   fi
 }
 
