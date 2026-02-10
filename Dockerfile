@@ -12,7 +12,6 @@ RUN apt-get update \
 COPY requirements.txt pyproject.toml README.md VERSION ./
 COPY src ./src
 COPY scripts ./scripts
-COPY sites.json ./
 
 RUN python -m pip install --upgrade pip \
     && pip install --no-cache-dir -r requirements.txt \
