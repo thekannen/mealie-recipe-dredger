@@ -57,7 +57,9 @@ cp .env.example .env
 # edit .env with MEALIE_URL + MEALIE_API_TOKEN
 ```
 
-3. Optional: edit `sites.json` on host (runtime-mounted read-only into container).
+3. Optional: edit `data/sites.json` on host.
+On first container start, it is auto-seeded from bundled `sites.json` if missing.
+It then lives under `data/` so git updates do not overwrite it.
 
 4. Deploy/update:
 

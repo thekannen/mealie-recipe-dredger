@@ -18,8 +18,10 @@ Edit `.env` and set:
 
 ## 2. Optional site customization
 
-Edit `sites.json` on host. It is mounted into the container at runtime:
-- `./sites.json:/app/sites.json:ro`
+Edit `data/sites.json` on host.
+
+At first start, the container seeds `data/sites.json` from bundled `/app/sites.json` if it does not exist yet.
+After that, updates from git do not overwrite your runtime site list.
 
 ## 3. Deploy/update
 

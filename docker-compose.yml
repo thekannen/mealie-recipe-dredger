@@ -14,7 +14,6 @@ services:
       RUN_SCHEDULE_TIME: "03:00"
     volumes:
       - ./data:/app/data
-      - ./sites.json:/app/sites.json:ro
     extra_hosts:
       - "host.docker.internal:host-gateway"
 
@@ -34,6 +33,5 @@ services:
       MAX_WORKERS: 2
     volumes:
       - ./data:/app/data
-      - ./sites.json:/app/sites.json:ro
     extra_hosts:
       - "host.docker.internal:host-gateway"

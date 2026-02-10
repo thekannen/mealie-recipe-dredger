@@ -64,4 +64,4 @@ Thumbs.db
 htmlcov/
 
 # Custom ignores (uncomment as needed)
-custom_sites.ignore
+custom_sites.json

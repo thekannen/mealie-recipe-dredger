@@ -10,6 +10,7 @@ All notable changes to this project will be documented in this file.
 - **Import Precheck Thread Safety:** Protected duplicate source-url precheck state with a lock to safely support concurrent imports.
 - **Mealie Import Throttling:** Removed crawler-domain delay throttling from Mealie API import calls; crawl delay remains for scraped sites.
 - **Docs:** Updated README and setup guide with performance tuning guidance for `IMPORT_WORKERS` and `MEALIE_IMPORT_TIMEOUT`.
+- **Runtime Sites Persistence:** Docker runtime now defaults `SITES` to `/app/data/sites.json` and auto-seeds it once from bundled `sites.json`, preventing update pulls from overwriting active site customizations.
 
 ## [1.0.0-beta.13] - 2026-02-09
 

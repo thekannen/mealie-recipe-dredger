@@ -6,6 +6,25 @@ RUN_MODE="${RUN_MODE:-once}"
 RUN_INTERVAL_SECONDS="${RUN_INTERVAL_SECONDS:-21600}"
 RUN_SCHEDULE_DAY="${RUN_SCHEDULE_DAY:-7}"
 RUN_SCHEDULE_TIME="${RUN_SCHEDULE_TIME:-03:00}"
+RUNTIME_SITES_FILE="${RUNTIME_SITES_FILE:-/app/data/sites.json}"
+
+initialize_runtime_sites() {
+  mkdir -p "$(dirname "$RUNTIME_SITES_FILE")"
+
+  if [ -z "${SITES:-}" ]; then
+    export SITES="$RUNTIME_SITES_FILE"
+    echo "[init] SITES not set; defaulting to $SITES"
+  fi
+
+  if [ "$SITES" = "$RUNTIME_SITES_FILE" ] && [ ! -f "$RUNTIME_SITES_FILE" ]; then
+    if [ -f /app/sites.json ]; then
+      cp /app/sites.json "$RUNTIME_SITES_FILE"
+      echo "[init] Seeded runtime sites file: $RUNTIME_SITES_FILE"
+    else
+      echo "[warn] /app/sites.json not found; dredger will fall back to built-in defaults."
+    fi
+  fi
+}
 
 run_task() {
   case "$TASK" in
@@ -53,6 +72,8 @@ seconds_until_next_schedule() {
 }
 
 if [ "$RUN_MODE" = "loop" ]; then
+  initialize_runtime_sites
+
   if ! [[ "$RUN_INTERVAL_SECONDS" =~ ^[0-9]+$ ]]; then
     echo "[error] RUN_INTERVAL_SECONDS must be an integer."
     exit 1
@@ -67,6 +88,8 @@ if [ "$RUN_MODE" = "loop" ]; then
 fi
 
 if [ "$RUN_MODE" = "schedule" ]; then
+  initialize_runtime_sites
+
   echo "[start] Schedule mode enabled (task=$TASK, day=$RUN_SCHEDULE_DAY, time=$RUN_SCHEDULE_TIME)"
   while true; do
     sleep_seconds="$(seconds_until_next_schedule)"
@@ -78,6 +101,8 @@ if [ "$RUN_MODE" = "schedule" ]; then
 fi
 
 if [ "$RUN_MODE" = "once" ]; then
+  initialize_runtime_sites
+
   run_task
   exit 0
 fi
