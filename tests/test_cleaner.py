@@ -78,6 +78,17 @@ def test_classify_recipe_action_keeps_clean_title_when_only_slug_has_how_to():
     assert new_name is None
 
 
+def test_classify_recipe_action_keeps_punctuated_clean_title_when_slug_has_how_to():
+    action, reason, new_name = classify_recipe_action(
+        name="Vanilla Extract & More",
+        url=None,
+        slug="how-to-make-vanilla-extract-more",
+    )
+    assert action == "keep"
+    assert reason == "How-to slug only with clean recipe title"
+    assert new_name is None
+
+
 def test_suggest_salvage_name_removes_how_to_prefix():
     assert suggest_salvage_name("How to Make Almond Butter in a Blender", "how-to-make-almond-butter-in-a-blender") == (
         "Almond Butter In A Blender"

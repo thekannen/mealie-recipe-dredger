@@ -382,6 +382,10 @@ def suggest_salvage_name(name: str, slug: Optional[str]) -> Optional[str]:
     if cleaned_from_name and cleaned_from_name.lower() != original.lower():
         return cleaned_from_name
 
+    # Only infer rename from slug when the title itself is explicitly a how-to.
+    if not HOW_TO_COOK_REGEX.search(original.lower()):
+        return None
+
     slug_text = _slug_fallback(None, slug)
     if slug_text:
         cleaned_from_slug = normalize_recipe_name(slug_text)
@@ -606,6 +610,9 @@ def run_cleaner() -> int:
 
     logger.info("--- Phase 1: Surgical Filter Scan ---")
     clean_tasks: List[Dict[str, Any]] = []
+    phase1_deleted = 0
+    phase1_rename_succeeded = 0
+    phase1_rename_failed = 0
     for recipe in tasks:
         name = _as_optional_str(recipe.get("name")) or "Unknown"
         url = (
@@ -622,6 +629,7 @@ def run_cleaner() -> int:
 
         action, reason, new_name = classify_recipe_action(name, url, slug)
         if action == "delete":
+            phase1_deleted += 1
             delete_mealie_recipe(
                 slug,
                 name,
@@ -634,11 +642,24 @@ def run_cleaner() -> int:
             continue
 
         if action == "rename" and new_name:
-            rename_mealie_recipe(slug, name, new_name, recipe_id=recipe_id)
+            if rename_mealie_recipe(slug, name, new_name, recipe_id=recipe_id):
+                phase1_rename_succeeded += 1
+            else:
+                phase1_rename_failed += 1
 
         clean_tasks.append(recipe)
 
+    logger.info(
+        "Phase 1 summary: "
+        f"deleted={phase1_deleted}, "
+        f"renamed={phase1_rename_succeeded}, "
+        f"rename_failed={phase1_rename_failed}, "
+        f"passed_to_phase2={len(clean_tasks)}"
+    )
+
     logger.info(f"--- Phase 2: Deep Integrity Scan (Checking {len(clean_tasks)} recipes) ---")
+    phase2_deleted = 0
+    phase2_verified = 0
     with concurrent.futures.ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
         futures = [executor.submit(check_integrity, recipe, verified) for recipe in clean_tasks]
         future_recipe_id = {future: _extract_recipe_id(recipe) for future, recipe in zip(futures, clean_tasks)}
@@ -648,8 +669,10 @@ def run_cleaner() -> int:
             if result:
                 slug, marker, reason, url = result
                 if marker == "VERIFIED":
+                    phase2_verified += 1
                     verified.add(slug)
                 else:
+                    phase2_deleted += 1
                     delete_mealie_recipe(
                         slug,
                         marker,
@@ -662,6 +685,12 @@ def run_cleaner() -> int:
 
             if index % 10 == 0:
                 logger.debug(f"Progress: {index}/{len(clean_tasks)}")
+
+    logger.info(
+        "Phase 2 summary: "
+        f"verified={phase2_verified}, "
+        f"deleted={phase2_deleted}"
+    )
 
     if not DRY_RUN:
         save_json_set(REJECT_FILE, rejects)
