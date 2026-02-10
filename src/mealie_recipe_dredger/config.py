@@ -30,6 +30,7 @@ CACHE_EXPIRY_DAYS = int(os.getenv("CACHE_EXPIRY_DAYS", 7))
 MAX_RETRY_ATTEMPTS = int(os.getenv("MAX_RETRY_ATTEMPTS", 3))
 IMPORT_PRECHECK_DUPLICATES = os.getenv("IMPORT_PRECHECK_DUPLICATES", "true").lower() == "true"
 IMPORT_WORKERS = max(1, int(os.getenv("IMPORT_WORKERS", 2)))
+SITE_IMPORT_FAILURE_THRESHOLD = max(0, int(os.getenv("SITE_IMPORT_FAILURE_THRESHOLD", 3)))
 
 
 def _normalize_language(value: str) -> str:

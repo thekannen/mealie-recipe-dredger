@@ -172,6 +172,7 @@ Useful tuning values:
 - `CACHE_EXPIRY_DAYS`
 - `MEALIE_IMPORT_TIMEOUT`
 - `IMPORT_WORKERS`
+- `SITE_IMPORT_FAILURE_THRESHOLD`
 - `MAX_RETRY_ATTEMPTS`
 
 ### Language filtering and post-hoc cleanup
@@ -200,6 +201,7 @@ docker compose run --rm -e TASK=cleaner -e RUN_MODE=once -e DRY_RUN=false mealie
 - Import throughput is usually bounded by Mealie's `/api/recipes/create/url` latency.
 - Increase `IMPORT_WORKERS` (start at `2`, then test `3-4`) to overlap slow Mealie imports.
 - Increase `MEALIE_IMPORT_TIMEOUT` if you see frequent timeout retries under load.
+- Keep `SITE_IMPORT_FAILURE_THRESHOLD` at a low value (for example `3`) to skip sites that repeatedly return Mealie HTTP 5xx import errors.
 
 Site source priority:
 1. CLI `--sites`

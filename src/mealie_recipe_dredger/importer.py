@@ -48,6 +48,18 @@ class ImportManager:
         self._source_index_failed = False
         self._source_lock = threading.Lock()
 
+    def _compact_error_body(self, text: str) -> str:
+        body = text.strip().replace("\n", " ")
+        if len(body) > 180:
+            body = f"{body[:177]}..."
+        return body
+
+    def _is_permanent_mealie_500(self, body: str) -> bool:
+        lowered = body.lower()
+        # Mealie sometimes returns HTTP 500 for source pages it cannot parse.
+        # Retrying these is usually wasted time.
+        return "unknown error" in lowered or "noresultfound" in lowered or "no result found" in lowered
+
     def _extract_source_url(self, recipe: Dict[str, Any]) -> str:
         for key in ["orgURL", "originalURL", "source"]:
             value = recipe.get(key)
@@ -166,11 +178,12 @@ class ImportManager:
                     continue
 
                 if response.status_code in TRANSIENT_HTTP_CODES:
-                    return False, f"HTTP {response.status_code}", True
+                    body = self._compact_error_body(response.text)
+                    if response.status_code == 500 and body and self._is_permanent_mealie_500(body):
+                        return False, f"HTTP {response.status_code} - {body}", False
+                    return False, f"HTTP {response.status_code}" + (f" - {body}" if body else ""), True
 
-                body = response.text.strip().replace("\n", " ")
-                if len(body) > 180:
-                    body = f"{body[:177]}..."
+                body = self._compact_error_body(response.text)
                 return False, f"HTTP {response.status_code}" + (f" - {body}" if body else ""), False
 
             return False, endpoint_error or "No compatible Mealie import endpoint found", False

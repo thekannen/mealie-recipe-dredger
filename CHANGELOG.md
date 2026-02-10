@@ -11,6 +11,8 @@ All notable changes to this project will be documented in this file.
 - **Mealie Import Throttling:** Removed crawler-domain delay throttling from Mealie API import calls; crawl delay remains for scraped sites.
 - **Docs:** Updated README and setup guide with performance tuning guidance for `IMPORT_WORKERS` and `MEALIE_IMPORT_TIMEOUT`.
 - **Runtime Sites Persistence:** Docker runtime now defaults `SITES` to `/app/data/sites.json` and auto-seeds it once from bundled `sites.json`, preventing update pulls from overwriting active site customizations.
+- **Fail-Fast Site Aborts:** Added `SITE_IMPORT_FAILURE_THRESHOLD` so repeated Mealie HTTP 5xx import failures abort a bad site early instead of burning an entire site quota.
+- **Retry Queue Finalization:** Retry queue entries that hit max attempts are now rejected immediately in the same run (instead of waiting for another cycle).
 
 ## [1.0.0-beta.13] - 2026-02-09
 

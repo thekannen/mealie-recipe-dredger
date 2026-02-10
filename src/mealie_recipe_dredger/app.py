@@ -18,6 +18,7 @@ from .config import (
     MAX_RETRY_ATTEMPTS,
     MEALIE_API_TOKEN,
     MEALIE_ENABLED,
+    SITE_IMPORT_FAILURE_THRESHOLD,
     __version__,
 )
 from .logging_utils import configure_logging
@@ -87,7 +88,13 @@ def process_retry_queue(
             if verify_transient:
                 storage.add_retry(url_key, verify_error or "Transient verification failure", increment=True)
                 queue_entry = storage.retry_queue.get(url_key, {})
-                logger.warning(f"   ↻ Retry queued ({queue_entry.get('attempts', 0)}/{MAX_RETRY_ATTEMPTS}) [verify]: {url}")
+                attempts_now = int(queue_entry.get("attempts", 0))
+                if attempts_now >= MAX_RETRY_ATTEMPTS:
+                    logger.warning(f"   ❌ Max retries reached [verify], rejecting: {url}")
+                    storage.remove_retry(url_key)
+                    storage.add_reject(url_key)
+                else:
+                    logger.warning(f"   ↻ Retry queued ({attempts_now}/{MAX_RETRY_ATTEMPTS}) [verify]: {url}")
             else:
                 storage.remove_retry(url_key)
                 storage.add_reject(url_key)
@@ -101,7 +108,13 @@ def process_retry_queue(
         if import_transient:
             storage.add_retry(url_key, import_error or "Transient import failure", increment=True)
             queue_entry = storage.retry_queue.get(url_key, {})
-            logger.warning(f"   ↻ Retry queued ({queue_entry.get('attempts', 0)}/{MAX_RETRY_ATTEMPTS}) [import]: {url}")
+            attempts_now = int(queue_entry.get("attempts", 0))
+            if attempts_now >= MAX_RETRY_ATTEMPTS:
+                logger.warning(f"   ❌ Max retries reached [import], rejecting: {url}")
+                storage.remove_retry(url_key)
+                storage.add_reject(url_key)
+            else:
+                logger.warning(f"   ↻ Retry queued ({attempts_now}/{MAX_RETRY_ATTEMPTS}) [import]: {url}")
         else:
             storage.remove_retry(url_key)
             storage.add_reject(url_key)
@@ -190,6 +203,8 @@ def run(args: argparse.Namespace) -> int:
     logger.info(f"   Targets: {len(sites_list)} sites")
     logger.info(f"   Limit: {target_count} per site")
     logger.info(f"   Import Workers: {IMPORT_WORKERS}")
+    if SITE_IMPORT_FAILURE_THRESHOLD > 0:
+        logger.info(f"   Site Failure Threshold: {SITE_IMPORT_FAILURE_THRESHOLD} consecutive HTTP 5xx import errors")
 
     storage = StorageManager()
     killer = GracefulKiller()
@@ -257,10 +272,12 @@ def run(args: argparse.Namespace) -> int:
             random.shuffle(candidates)
 
             imported_count = 0
+            site_import_failure_streak = 0
+            abort_site = False
             pending_imports: dict[concurrent.futures.Future[Tuple[bool, Optional[str], bool]], tuple[str, str]] = {}
 
             def drain_imports(block: bool = False) -> None:
-                nonlocal imported_count
+                nonlocal imported_count, site_import_failure_streak, abort_site
                 if not pending_imports:
                     return
 
@@ -280,9 +297,26 @@ def run(args: argparse.Namespace) -> int:
                         imported, import_error, import_transient = False, str(exc), False
                     if handle_import_result(url, url_key, imported, import_error, import_transient, site_stats):
                         imported_count += 1
+                        site_import_failure_streak = 0
+                        continue
+
+                    if import_error and import_error.startswith("HTTP 5"):
+                        site_import_failure_streak += 1
+                        if SITE_IMPORT_FAILURE_THRESHOLD > 0 and site_import_failure_streak >= SITE_IMPORT_FAILURE_THRESHOLD:
+                            if not abort_site:
+                                logger.warning(
+                                    f"   🚫 Aborting site due to repeated Mealie HTTP 5xx import failures "
+                                    f"(streak={site_import_failure_streak}): {site}"
+                                )
+                            abort_site = True
+                    else:
+                        site_import_failure_streak = 0
 
             for candidate in candidates:
                 if killer.kill_now:
+                    break
+
+                if abort_site:
                     break
 
                 if imported_count >= target_count:
@@ -303,6 +337,21 @@ def run(args: argparse.Namespace) -> int:
                         imported, import_error, import_transient = importer.import_recipe(url)
                         if handle_import_result(url, url_key, imported, import_error, import_transient, site_stats):
                             imported_count += 1
+                            site_import_failure_streak = 0
+                        else:
+                            if import_error and import_error.startswith("HTTP 5"):
+                                site_import_failure_streak += 1
+                                if (
+                                    SITE_IMPORT_FAILURE_THRESHOLD > 0
+                                    and site_import_failure_streak >= SITE_IMPORT_FAILURE_THRESHOLD
+                                ):
+                                    logger.warning(
+                                        f"   🚫 Aborting site due to repeated Mealie HTTP 5xx import failures "
+                                        f"(streak={site_import_failure_streak}): {site}"
+                                    )
+                                    abort_site = True
+                            else:
+                                site_import_failure_streak = 0
                         continue
 
                     while pending_imports and imported_count + len(pending_imports) >= target_count:
@@ -330,7 +379,7 @@ def run(args: argparse.Namespace) -> int:
                         storage.add_reject(url_key)
                         site_stats["rejected"] += 1
 
-            while pending_imports and not killer.kill_now and imported_count < target_count:
+            while pending_imports and not killer.kill_now and imported_count < target_count and not abort_site:
                 drain_imports(block=True)
 
             if pending_imports:

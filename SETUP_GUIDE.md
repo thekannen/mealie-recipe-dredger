@@ -62,6 +62,7 @@ To prevent and clean true duplicates:
 To improve slow import throughput:
 - `IMPORT_WORKERS=2` (increase to `3-4` if your Mealie host has headroom)
 - `MEALIE_IMPORT_TIMEOUT=20` (increase if imports frequently timeout)
+- `SITE_IMPORT_FAILURE_THRESHOLD=3` (skip sites quickly when Mealie keeps returning 5xx on imports)
 
 ## 5. Runtime controls
 
