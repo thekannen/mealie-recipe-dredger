@@ -1,18 +1,20 @@
 from __future__ import annotations
 
 import argparse
+import concurrent.futures
 import json
 import logging
 import os
 import random
 import sys
-from typing import TYPE_CHECKING, Any, List, Optional
+from typing import TYPE_CHECKING, Any, List, Optional, Tuple
 
 from .config import (
     DEFAULT_DEPTH,
     DEFAULT_SITES,
     DEFAULT_TARGET,
     DRY_RUN,
+    IMPORT_WORKERS,
     MAX_RETRY_ATTEMPTS,
     MEALIE_API_TOKEN,
     MEALIE_ENABLED,
@@ -187,6 +189,7 @@ def run(args: argparse.Namespace) -> int:
     logger.info(f"   Mode: {'DRY RUN' if dry_run_mode else 'LIVE IMPORT'}")
     logger.info(f"   Targets: {len(sites_list)} sites")
     logger.info(f"   Limit: {target_count} per site")
+    logger.info(f"   Import Workers: {IMPORT_WORKERS}")
 
     storage = StorageManager()
     killer = GracefulKiller()
@@ -197,89 +200,155 @@ def run(args: argparse.Namespace) -> int:
     importer = ImportManager(session, storage, rate_limiter, dry_run_mode)
 
     process_retry_queue(storage, verifier, importer, rate_limiter)
+    def handle_import_result(
+        url: str,
+        url_key: str,
+        imported: bool,
+        import_error: Optional[str],
+        import_transient: bool,
+        site_stats: dict[str, int],
+    ) -> bool:
+        if imported:
+            storage.add_imported(url_key)
+            site_stats["imported"] += 1
+            return True
 
-    random.shuffle(sites_list)
+        site_stats["errors"] += 1
+        if import_transient:
+            storage.add_retry(url_key, import_error or "Transient import failure", increment=True)
+            if not TQDM_AVAILABLE:
+                queue_entry = storage.retry_queue.get(url_key, {})
+                logger.warning(
+                    f"   ↻ Transient import failure queued for retry "
+                    f"({queue_entry.get('attempts', 0)}/{MAX_RETRY_ATTEMPTS}): {url}"
+                )
+        else:
+            storage.add_reject(url_key)
+            if not TQDM_AVAILABLE:
+                logger.error(f"   ❌ Import failed ({import_error}): {url}")
 
-    iterator = sites_list
-    if TQDM_AVAILABLE and len(sites_list) > 1:
-        iterator = tqdm(sites_list, desc="Processing Sites", unit="site")
+        return False
 
-    for site in iterator:
-        if killer.kill_now:
-            break
+    import_executor: Optional[concurrent.futures.ThreadPoolExecutor] = None
+    if IMPORT_WORKERS > 1 and not dry_run_mode:
+        import_executor = concurrent.futures.ThreadPoolExecutor(max_workers=IMPORT_WORKERS)
 
-        if not TQDM_AVAILABLE:
-            logger.info(f"🌍 Processing Site: {site}")
+    try:
+        random.shuffle(sites_list)
 
-        site_stats = {"imported": 0, "rejected": 0, "errors": 0}
+        iterator = sites_list
+        if TQDM_AVAILABLE and len(sites_list) > 1:
+            iterator = tqdm(sites_list, desc="Processing Sites", unit="site")
 
-        raw_candidates = crawler.get_urls_for_site(site, force_refresh=force_refresh)
-        if not raw_candidates:
-            continue
-
-        candidates = raw_candidates[:scan_depth_count]
-        random.shuffle(candidates)
-
-        imported_count = 0
-        for candidate in candidates:
+        for site in iterator:
             if killer.kill_now:
                 break
 
-            if imported_count >= target_count:
-                break
+            if not TQDM_AVAILABLE:
+                logger.info(f"🌍 Processing Site: {site}")
 
-            url = candidate.url
-            url_key = canonicalize_url(url) or url
+            site_stats = {"imported": 0, "rejected": 0, "errors": 0}
 
-            if url_key in storage.imported or url_key in storage.rejects or url_key in storage.retry_queue:
+            raw_candidates = crawler.get_urls_for_site(site, force_refresh=force_refresh)
+            if not raw_candidates:
                 continue
 
-            rate_limiter.wait_if_needed(url)
+            candidates = raw_candidates[:scan_depth_count]
+            random.shuffle(candidates)
 
-            is_recipe, _, error, is_transient = verifier.verify_recipe(url)
+            imported_count = 0
+            pending_imports: dict[concurrent.futures.Future[Tuple[bool, Optional[str], bool]], tuple[str, str]] = {}
 
-            if is_recipe:
-                imported, import_error, import_transient = importer.import_recipe(url)
-                if imported:
-                    storage.add_imported(url_key)
-                    imported_count += 1
-                    site_stats["imported"] += 1
+            def drain_imports(block: bool = False) -> None:
+                nonlocal imported_count
+                if not pending_imports:
+                    return
+
+                if block:
+                    done, _ = concurrent.futures.wait(
+                        pending_imports.keys(),
+                        return_when=concurrent.futures.FIRST_COMPLETED,
+                    )
                 else:
-                    site_stats["errors"] += 1
-                    if import_transient:
-                        storage.add_retry(url_key, import_error or "Transient import failure", increment=True)
+                    done = {future for future in pending_imports if future.done()}
+
+                for future in done:
+                    url, url_key = pending_imports.pop(future)
+                    try:
+                        imported, import_error, import_transient = future.result()
+                    except Exception as exc:
+                        imported, import_error, import_transient = False, str(exc), False
+                    if handle_import_result(url, url_key, imported, import_error, import_transient, site_stats):
+                        imported_count += 1
+
+            for candidate in candidates:
+                if killer.kill_now:
+                    break
+
+                if imported_count >= target_count:
+                    break
+
+                url = candidate.url
+                url_key = canonicalize_url(url) or url
+
+                if url_key in storage.imported or url_key in storage.rejects or url_key in storage.retry_queue:
+                    continue
+
+                rate_limiter.wait_if_needed(url)
+
+                is_recipe, _, error, is_transient = verifier.verify_recipe(url)
+
+                if is_recipe:
+                    if import_executor is None:
+                        imported, import_error, import_transient = importer.import_recipe(url)
+                        if handle_import_result(url, url_key, imported, import_error, import_transient, site_stats):
+                            imported_count += 1
+                        continue
+
+                    while pending_imports and imported_count + len(pending_imports) >= target_count:
+                        drain_imports(block=True)
+                        if killer.kill_now:
+                            break
+                    if killer.kill_now or imported_count >= target_count:
+                        break
+
+                    future = import_executor.submit(importer.import_recipe, url)
+                    pending_imports[future] = (url, url_key)
+                    drain_imports(block=False)
+                else:
+                    if is_transient:
+                        storage.add_retry(url_key, error or "Transient verification failure", increment=True)
                         if not TQDM_AVAILABLE:
                             queue_entry = storage.retry_queue.get(url_key, {})
                             logger.warning(
-                                f"   ↻ Transient import failure queued for retry "
+                                f"   ↻ Transient verification failure queued for retry "
                                 f"({queue_entry.get('attempts', 0)}/{MAX_RETRY_ATTEMPTS}): {url}"
                             )
                     else:
-                        storage.add_reject(url_key)
                         if not TQDM_AVAILABLE:
-                            logger.error(f"   ❌ Import failed ({import_error}): {url}")
-            else:
-                if is_transient:
-                    storage.add_retry(url_key, error or "Transient verification failure", increment=True)
-                    if not TQDM_AVAILABLE:
-                        queue_entry = storage.retry_queue.get(url_key, {})
-                        logger.warning(
-                            f"   ↻ Transient verification failure queued for retry "
-                            f"({queue_entry.get('attempts', 0)}/{MAX_RETRY_ATTEMPTS}): {url}"
-                        )
-                else:
-                    if not TQDM_AVAILABLE:
-                        logger.debug(f"   Skipping ({error}): {url}")
-                    storage.add_reject(url_key)
-                    site_stats["rejected"] += 1
+                            logger.debug(f"   Skipping ({error}): {url}")
+                        storage.add_reject(url_key)
+                        site_stats["rejected"] += 1
 
-        if not TQDM_AVAILABLE:
-            logger.info(
-                f"   Site Results: {site_stats['imported']} imported, "
-                f"{site_stats['rejected']} rejected, {site_stats['errors']} errors"
-            )
+            while pending_imports and not killer.kill_now and imported_count < target_count:
+                drain_imports(block=True)
 
-        storage.flush_all()
+            if pending_imports:
+                for future in list(pending_imports):
+                    future.cancel()
+                    pending_imports.pop(future, None)
+
+            if not TQDM_AVAILABLE:
+                logger.info(
+                    f"   Site Results: {site_stats['imported']} imported, "
+                    f"{site_stats['rejected']} rejected, {site_stats['errors']} errors"
+                )
+
+            storage.flush_all()
+
+    finally:
+        if import_executor is not None:
+            import_executor.shutdown(wait=False, cancel_futures=True)
 
     if not killer.kill_now:
         print_summary(storage)

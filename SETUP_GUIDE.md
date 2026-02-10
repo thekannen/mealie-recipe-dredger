@@ -57,6 +57,10 @@ To prevent and clean true duplicates:
 - `IMPORT_PRECHECK_DUPLICATES=true` (prevents re-import by canonical source URL)
 - `CLEANER_DEDUPE_BY_SOURCE=true` (removes existing duplicates sharing canonical source URL)
 
+To improve slow import throughput:
+- `IMPORT_WORKERS=2` (increase to `3-4` if your Mealie host has headroom)
+- `MEALIE_IMPORT_TIMEOUT=20` (increase if imports frequently timeout)
+
 ## 5. Runtime controls
 
 Supported container env vars:
@@ -86,7 +90,7 @@ docker compose run --rm -e TASK=dredger -e RUN_MODE=schedule -e RUN_SCHEDULE_DAY
 You deployed from tarball/curl. Re-clone as git repo, or run manual compose build/up commands.
 
 ### Import timeouts to Mealie
-Increase `MEALIE_IMPORT_TIMEOUT`, verify Mealie host reachability, and check Mealie server load.
+Increase `MEALIE_IMPORT_TIMEOUT`, verify Mealie host reachability, check Mealie server load, and tune `IMPORT_WORKERS` gradually.
 
 ### Too many rejects from transient outages
 Check `data/retry_queue.json`; transient failures should queue and retry automatically.

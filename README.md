@@ -169,6 +169,7 @@ Useful tuning values:
 - `CRAWL_DELAY`
 - `CACHE_EXPIRY_DAYS`
 - `MEALIE_IMPORT_TIMEOUT`
+- `IMPORT_WORKERS`
 - `MAX_RETRY_ATTEMPTS`
 
 ### Language filtering and post-hoc cleanup
@@ -191,6 +192,12 @@ docker compose run --rm -e TASK=cleaner -e RUN_MODE=once -e DRY_RUN=false mealie
 - Import-time: `IMPORT_PRECHECK_DUPLICATES=true` checks Mealie for canonical source URL duplicates before posting import.
 - Cleaner: `CLEANER_DEDUPE_BY_SOURCE=true` removes duplicate recipes that share the same canonical source URL.
 - Name collisions from different sites are not auto-deleted solely by title; source URL is used as the safe dedupe key.
+
+### Performance tuning
+
+- Import throughput is usually bounded by Mealie's `/api/recipes/create/url` latency.
+- Increase `IMPORT_WORKERS` (start at `2`, then test `3-4`) to overlap slow Mealie imports.
+- Increase `MEALIE_IMPORT_TIMEOUT` if you see frequent timeout retries under load.
 
 Site source priority:
 1. CLI `--sites`

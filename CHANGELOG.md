@@ -1,6 +1,16 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+### Added
+- **Parallel Import Workers:** Added `IMPORT_WORKERS` to allow concurrent Mealie import requests for better throughput on slow `/api/recipes/create/url` responses.
+
+### Changed
+- **Import Precheck Thread Safety:** Protected duplicate source-url precheck state with a lock to safely support concurrent imports.
+- **Mealie Import Throttling:** Removed crawler-domain delay throttling from Mealie API import calls; crawl delay remains for scraped sites.
+- **Docs:** Updated README and setup guide with performance tuning guidance for `IMPORT_WORKERS` and `MEALIE_IMPORT_TIMEOUT`.
+
 ## [1.0.0-beta.13] - 2026-02-09
 
 ### Added

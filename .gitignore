@@ -62,3 +62,6 @@ Thumbs.db
 .mypy_cache/
 .ruff_cache/
 htmlcov/
+
+# Custom ignores (uncomment as needed)
+custom_sites.ignore

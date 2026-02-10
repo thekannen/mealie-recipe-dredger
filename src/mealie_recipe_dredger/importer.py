@@ -1,4 +1,5 @@
 import logging
+import threading
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 import requests
@@ -45,6 +46,7 @@ class ImportManager:
         self._known_source_urls: Set[str] = set()
         self._source_index_loaded = False
         self._source_index_failed = False
+        self._source_lock = threading.Lock()
 
     def _extract_source_url(self, recipe: Dict[str, Any]) -> str:
         for key in ["orgURL", "originalURL", "source"]:
@@ -102,14 +104,15 @@ class ImportManager:
         if not IMPORT_PRECHECK_DUPLICATES:
             return False
 
-        self._load_existing_sources(headers)
-        if self._source_index_failed:
-            return False
+        with self._source_lock:
+            self._load_existing_sources(headers)
+            if self._source_index_failed:
+                return False
 
-        canonical_source = canonicalize_url(url)
-        if canonical_source and canonical_source in self._known_source_urls:
-            logger.info(f"   ⚠️ [Mealie] Duplicate source URL detected, skipping import: {url}")
-            return True
+            canonical_source = canonicalize_url(url)
+            if canonical_source and canonical_source in self._known_source_urls:
+                logger.info(f"   ⚠️ [Mealie] Duplicate source URL detected, skipping import: {url}")
+                return True
         return False
 
     def import_to_mealie(self, url: str) -> Tuple[bool, Optional[str], bool]:
@@ -122,7 +125,6 @@ class ImportManager:
             if self._precheck_duplicate_source(url, headers):
                 return True, None, False
 
-            self.rate_limiter.wait_if_needed(MEALIE_URL)
             candidate_paths = list(self._mealie_endpoint_candidates)
             if self._mealie_import_path in candidate_paths:
                 candidate_paths.remove(self._mealie_import_path)
@@ -143,7 +145,8 @@ class ImportManager:
                         logger.info(f"   [Mealie] Using import endpoint: {path}")
                     canonical_source = canonicalize_url(url)
                     if canonical_source:
-                        self._known_source_urls.add(canonical_source)
+                        with self._source_lock:
+                            self._known_source_urls.add(canonical_source)
                     logger.info(f"   ✅ [Mealie] Imported: {url}")
                     return True, None, False
 
@@ -153,7 +156,8 @@ class ImportManager:
                         logger.info(f"   [Mealie] Using import endpoint: {path}")
                     canonical_source = canonicalize_url(url)
                     if canonical_source:
-                        self._known_source_urls.add(canonical_source)
+                        with self._source_lock:
+                            self._known_source_urls.add(canonical_source)
                     logger.info(f"   ⚠️ [Mealie] Duplicate: {url}")
                     return True, None, False
 
