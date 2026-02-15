@@ -73,7 +73,7 @@ To improve slow import throughput:
 ## 5. Runtime controls
 
 Supported container env vars:
-- `TASK=dredger|cleaner`
+- `TASK=dredger|cleaner|align-sites`
 - `RUN_MODE=once|loop|schedule`
 - `RUN_INTERVAL_SECONDS=<int>`
 - `RUN_SCHEDULE_DAY=<1-7>` (`1=Mon`, `7=Sun`)
@@ -118,6 +118,15 @@ Manual apply:
 ```bash
 mealie-align-sites --sites-file data/sites.json --baseline-sites-file sites.json --apply
 ```
+
+Docker-native run (recommended for deployed environments):
+
+```bash
+docker compose run --rm -e TASK=align-sites -e RUN_MODE=once mealie-recipe-dredger
+docker compose run --rm -e TASK=align-sites -e RUN_MODE=once -e ALIGN_SITES_BASELINE_FILE=/app/data/site_alignment_hosts.json -e ALIGN_SITES_APPLY=true mealie-recipe-dredger
+```
+
+For apply mode in Docker task runs, set `ALIGN_SITES_BASELINE_FILE` so pruning remains diff-scoped.
 
 ## Troubleshooting
 

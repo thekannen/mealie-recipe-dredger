@@ -7,6 +7,43 @@ RUN_INTERVAL_SECONDS="${RUN_INTERVAL_SECONDS:-21600}"
 RUN_SCHEDULE_DAY="${RUN_SCHEDULE_DAY:-7}"
 RUN_SCHEDULE_TIME="${RUN_SCHEDULE_TIME:-03:00}"
 RUNTIME_SITES_FILE="${RUNTIME_SITES_FILE:-/app/data/sites.json}"
+ALIGN_SITES_APPLY="${ALIGN_SITES_APPLY:-false}"
+
+run_align_sites_task() {
+  if [ "$ALIGN_SITES_APPLY" = "true" ] && [ -z "${ALIGN_SITES_BASELINE_FILE:-}" ]; then
+    echo "[error] ALIGN_SITES_APPLY=true requires ALIGN_SITES_BASELINE_FILE for diff-scoped pruning."
+    exit 1
+  fi
+
+  local cmd=()
+  cmd+=(mealie-align-sites)
+
+  if [ -n "${SITES:-}" ]; then
+    cmd+=(--sites-file "$SITES")
+  fi
+
+  if [ -n "${ALIGN_SITES_BASELINE_FILE:-}" ]; then
+    cmd+=(--baseline-sites-file "$ALIGN_SITES_BASELINE_FILE")
+  fi
+
+  if [ -n "${ALIGN_SITES_TIMEOUT:-}" ]; then
+    cmd+=(--timeout "$ALIGN_SITES_TIMEOUT")
+  fi
+
+  if [ -n "${ALIGN_SITES_PREVIEW_LIMIT:-}" ]; then
+    cmd+=(--preview-limit "$ALIGN_SITES_PREVIEW_LIMIT")
+  fi
+
+  if [ "${ALIGN_SITES_INCLUDE_MISSING_SOURCE:-false}" = "true" ]; then
+    cmd+=(--include-missing-source)
+  fi
+
+  if [ "$ALIGN_SITES_APPLY" = "true" ]; then
+    cmd+=(--apply)
+  fi
+
+  "${cmd[@]}"
+}
 
 initialize_runtime_sites() {
   mkdir -p "$(dirname "$RUNTIME_SITES_FILE")"
@@ -40,8 +77,11 @@ run_task() {
     cleaner)
       mealie-cleaner
       ;;
+    align-sites)
+      run_align_sites_task
+      ;;
     *)
-      echo "[error] Unknown TASK '$TASK'. Use dredger or cleaner."
+      echo "[error] Unknown TASK '$TASK'. Use dredger, cleaner, or align-sites."
       exit 1
       ;;
   esac

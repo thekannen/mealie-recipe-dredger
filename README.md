@@ -80,6 +80,7 @@ docker compose logs -f mealie-recipe-dredger
 Docker entrypoint supports:
 - `TASK=dredger` (default service behavior)
 - `TASK=cleaner`
+- `TASK=align-sites`
 - `RUN_MODE=once` (entrypoint fallback if unset)
 - `RUN_MODE=loop` with `RUN_INTERVAL_SECONDS=<int>`
 - `RUN_MODE=schedule` with:
@@ -101,6 +102,9 @@ docker compose run --rm -e TASK=dredger -e RUN_MODE=schedule -e RUN_SCHEDULE_DAY
 
 # run cleaner once
 docker compose run --rm -e TASK=cleaner -e RUN_MODE=once mealie-recipe-dredger
+
+# run site alignment once (dry run by default)
+docker compose run --rm -e TASK=align-sites -e RUN_MODE=once mealie-recipe-dredger
 ```
 
 ## Update and redeploy
@@ -237,6 +241,15 @@ Backward-compatible wrapper:
 ```bash
 python3 scripts/oneoff/prune_by_sites.py --sites-file data/sites.json --baseline-sites-file sites.json --apply
 ```
+
+Docker-native run (uses env_file and runtime `SITES` automatically):
+
+```bash
+docker compose run --rm -e TASK=align-sites -e RUN_MODE=once mealie-recipe-dredger
+docker compose run --rm -e TASK=align-sites -e RUN_MODE=once -e ALIGN_SITES_BASELINE_FILE=/app/data/site_alignment_hosts.json -e ALIGN_SITES_APPLY=true mealie-recipe-dredger
+```
+
+For destructive apply in Docker task mode, set `ALIGN_SITES_BASELINE_FILE` so pruning stays diff-scoped.
 
 ### Performance tuning
 

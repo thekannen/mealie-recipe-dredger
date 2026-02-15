@@ -11,6 +11,14 @@ from urllib.parse import urlparse
 
 import requests
 
+try:
+    from dotenv import load_dotenv
+
+    load_dotenv()
+except Exception:
+    # Still works with explicit CLI args or exported env vars.
+    pass
+
 DEFAULT_SITES_FILE = "data/sites.json"
 DEFAULT_TIMEOUT = 20
 PER_PAGE = 1000
