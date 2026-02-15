@@ -22,7 +22,7 @@ except Exception:
     pass
 
 DEFAULT_SITES_FILE = "data/sites.json"
-DEFAULT_TIMEOUT = 20
+DEFAULT_TIMEOUT = 300
 PER_PAGE = 1000
 
 LOGGER = logging.getLogger("dredger.site_alignment")
