@@ -32,6 +32,15 @@ IMPORT_PRECHECK_DUPLICATES = os.getenv("IMPORT_PRECHECK_DUPLICATES", "true").low
 IMPORT_WORKERS = max(1, int(os.getenv("IMPORT_WORKERS", 2)))
 SITE_IMPORT_FAILURE_THRESHOLD = max(0, int(os.getenv("SITE_IMPORT_FAILURE_THRESHOLD", 3)))
 
+ALIGN_RECIPES_WITH_SITES = os.getenv("ALIGN_RECIPES_WITH_SITES", "false").lower() == "true"
+ALIGN_SITES_INCLUDE_MISSING_SOURCE = os.getenv("ALIGN_SITES_INCLUDE_MISSING_SOURCE", "false").lower() == "true"
+ALIGN_SITES_PREVIEW_LIMIT = max(0, int(os.getenv("ALIGN_SITES_PREVIEW_LIMIT", "50")))
+ALIGN_SITES_TIMEOUT = max(5, int(os.getenv("ALIGN_SITES_TIMEOUT", str(MEALIE_IMPORT_TIMEOUT))))
+ALIGN_SITES_BASELINE_FILE = os.getenv("ALIGN_SITES_BASELINE_FILE", "").strip()
+ALIGN_SITES_STATE_FILE = Path(
+    os.getenv("ALIGN_SITES_STATE_FILE", str(DATA_DIR / "site_alignment_hosts.json"))
+)
+
 
 def _normalize_language(value: str) -> str:
     cleaned = value.strip().lower().replace("_", "-")

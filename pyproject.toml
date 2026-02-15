@@ -26,6 +26,7 @@ dev = [
 [project.scripts]
 mealie-dredger = "mealie_recipe_dredger.app:main"
 mealie-cleaner = "mealie_recipe_dredger.cleaner:main"
+mealie-align-sites = "mealie_recipe_dredger.site_alignment:main"
 
 [tool.setuptools]
 package-dir = {"" = "src"}

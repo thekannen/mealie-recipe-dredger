@@ -149,6 +149,9 @@ mealie-dredger --dry-run --limit 10
 
 # cleaner
 mealie-cleaner
+
+# diff-based site alignment (dry run)
+mealie-align-sites --sites-file data/sites.json --baseline-sites-file sites.json
 ```
 
 4. Run tests:
@@ -181,6 +184,10 @@ Useful tuning values:
 - `IMPORT_WORKERS`
 - `SITE_IMPORT_FAILURE_THRESHOLD`
 - `MAX_RETRY_ATTEMPTS`
+- `ALIGN_RECIPES_WITH_SITES`
+- `ALIGN_SITES_BASELINE_FILE`
+- `ALIGN_SITES_STATE_FILE`
+- `ALIGN_SITES_INCLUDE_MISSING_SOURCE`
 
 ### Language filtering and post-hoc cleanup
 
@@ -203,18 +210,32 @@ docker compose run --rm -e TASK=cleaner -e RUN_MODE=once -e DRY_RUN=false mealie
 - Cleaner: `CLEANER_DEDUPE_BY_SOURCE=true` removes duplicate recipes that share the same canonical source URL.
 - Name collisions from different sites are not auto-deleted solely by title; source URL is used as the safe dedupe key.
 
-### One-time domain cleanup
+### Repeatable site alignment (diff mode)
 
-Use the one-off script to remove already-imported recipes from domains you removed in your custom list:
+Enable `ALIGN_RECIPES_WITH_SITES=true` to run alignment before each `mealie-dredger` cycle.
+
+- Alignment uses domain diff scope (baseline -> current), not "delete everything outside current sites".
+- This preserves manual/external recipes unless their host is explicitly in removed-domain scope.
+- Baseline source priority for dredger alignment:
+1. CLI `--align-sites-baseline` or env `ALIGN_SITES_BASELINE_FILE`
+2. rolling snapshot `data/site_alignment_hosts.json` (`ALIGN_SITES_STATE_FILE`), auto-initialized/updated on live runs
+
+Manual dry run:
 
 ```bash
-python3 scripts/oneoff/prune_by_sites.py --sites-file custom_sites.json --baseline-sites-file sites.json
+mealie-align-sites --sites-file data/sites.json --baseline-sites-file sites.json
 ```
 
-Apply deletions:
+Manual apply:
 
 ```bash
-python3 scripts/oneoff/prune_by_sites.py --sites-file custom_sites.json --baseline-sites-file sites.json --apply
+mealie-align-sites --sites-file data/sites.json --baseline-sites-file sites.json --apply
+```
+
+Backward-compatible wrapper:
+
+```bash
+python3 scripts/oneoff/prune_by_sites.py --sites-file data/sites.json --baseline-sites-file sites.json --apply
 ```
 
 ### Performance tuning

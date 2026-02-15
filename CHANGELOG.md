@@ -3,6 +3,13 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+- **Repeatable Site Alignment Feature:** Added reusable `site_alignment` module and `mealie-align-sites` CLI command for domain-policy reconciliation.
+- **Dredger Diff Alignment Mode:** Optional pre-crawl alignment step (`ALIGN_RECIPES_WITH_SITES`) now prunes only removed domains (baseline -> current), preserving manual/external recipes outside diff scope.
+
+### Changed
+- **One-Off Cleanup Script Reused:** `scripts/oneoff/prune_by_sites.py` is now a compatibility wrapper around the shared site-alignment implementation.
+
 ## [1.0.0-beta.14] - 2026-02-10
 
 ### Added

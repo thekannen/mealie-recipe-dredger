@@ -7,9 +7,16 @@ import logging
 import os
 import random
 import sys
-from typing import TYPE_CHECKING, Any, List, Optional, Tuple
+from pathlib import Path
+from typing import TYPE_CHECKING, Any, List, Optional, Set, Tuple
 
 from .config import (
+    ALIGN_RECIPES_WITH_SITES,
+    ALIGN_SITES_BASELINE_FILE,
+    ALIGN_SITES_INCLUDE_MISSING_SOURCE,
+    ALIGN_SITES_PREVIEW_LIMIT,
+    ALIGN_SITES_STATE_FILE,
+    ALIGN_SITES_TIMEOUT,
     DEFAULT_DEPTH,
     DEFAULT_SITES,
     DEFAULT_TARGET,
@@ -18,10 +25,19 @@ from .config import (
     MAX_RETRY_ATTEMPTS,
     MEALIE_API_TOKEN,
     MEALIE_ENABLED,
+    MEALIE_URL,
     SITE_IMPORT_FAILURE_THRESHOLD,
     __version__,
 )
 from .logging_utils import configure_logging
+from .site_alignment import (
+    align_mealie_recipes,
+    hosts_from_sites,
+    load_allowed_hosts,
+    load_host_snapshot,
+    removed_hosts_for_diff,
+    save_host_snapshot,
+)
 from .url_utils import canonicalize_url
 
 if TYPE_CHECKING:
@@ -178,6 +194,22 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--limit", type=int, default=DEFAULT_TARGET, help="Recipes to import per site")
     parser.add_argument("--depth", type=int, default=DEFAULT_DEPTH, help="URLs to scan per site")
     parser.add_argument("--sites", type=str, help="Path to JSON file containing site URLs")
+    parser.add_argument("--align-sites", action="store_true", help="Run diff-based site alignment before crawl")
+    parser.add_argument(
+        "--no-align-sites",
+        action="store_true",
+        help="Disable site alignment even if ALIGN_RECIPES_WITH_SITES=true",
+    )
+    parser.add_argument(
+        "--align-sites-baseline",
+        type=str,
+        help="Optional baseline sites JSON for diff comparison (removed domains are pruned).",
+    )
+    parser.add_argument(
+        "--align-sites-include-missing-source",
+        action="store_true",
+        help="Also prune recipes with missing source URL fields during site alignment.",
+    )
     parser.add_argument("--no-cache", action="store_true", help="Force fresh crawl (ignore sitemap cache)")
     parser.add_argument("--version", action="version", version=f"Recipe Dredger {__version__}")
     return parser
@@ -194,6 +226,12 @@ def run(args: argparse.Namespace) -> int:
     target_count = args.limit
     scan_depth_count = args.depth
     force_refresh = args.no_cache
+    alignment_enabled = ALIGN_RECIPES_WITH_SITES or args.align_sites
+    if args.no_align_sites:
+        alignment_enabled = False
+
+    include_missing_source = ALIGN_SITES_INCLUDE_MISSING_SOURCE or args.align_sites_include_missing_source
+    explicit_baseline_value = (args.align_sites_baseline or ALIGN_SITES_BASELINE_FILE or "").strip()
 
     validate_config()
     sites_list = load_sites_from_source(args.sites)
@@ -205,6 +243,111 @@ def run(args: argparse.Namespace) -> int:
     logger.info(f"   Import Workers: {IMPORT_WORKERS}")
     if SITE_IMPORT_FAILURE_THRESHOLD > 0:
         logger.info(f"   Site Failure Threshold: {SITE_IMPORT_FAILURE_THRESHOLD} consecutive HTTP 5xx import errors")
+
+    if alignment_enabled:
+        if not MEALIE_ENABLED:
+            logger.warning("Site alignment skipped: Mealie is disabled.")
+        elif not sites_list:
+            logger.warning("Site alignment skipped: active sites list is empty.")
+        else:
+            current_hosts = hosts_from_sites(sites_list)
+            if not current_hosts:
+                logger.warning("Site alignment skipped: active sites list did not yield valid hosts.")
+            else:
+                baseline_hosts: Set[str] = set()
+                baseline_source: str = ""
+                using_state_snapshot = False
+                baseline_ready = True
+
+                if explicit_baseline_value:
+                    baseline_path = Path(explicit_baseline_value)
+                    if not baseline_path.exists():
+                        logger.warning(
+                            f"Site alignment skipped: baseline sites file not found ({baseline_path})."
+                        )
+                        baseline_ready = False
+                    else:
+                        try:
+                            baseline_hosts = load_allowed_hosts(baseline_path)
+                            baseline_source = str(baseline_path)
+                        except Exception as exc:
+                            logger.warning(f"Site alignment skipped: failed to parse baseline sites file: {exc}")
+                            baseline_ready = False
+                else:
+                    using_state_snapshot = True
+                    try:
+                        snapshot_hosts = load_host_snapshot(ALIGN_SITES_STATE_FILE)
+                    except Exception as exc:
+                        logger.warning(
+                            f"Site alignment skipped: failed to read baseline snapshot ({ALIGN_SITES_STATE_FILE}): {exc}"
+                        )
+                        baseline_ready = False
+                        snapshot_hosts = None
+
+                    if baseline_ready:
+                        if snapshot_hosts is None:
+                            baseline_hosts = set(current_hosts)
+                            baseline_source = str(ALIGN_SITES_STATE_FILE)
+                            logger.info(
+                                "Site alignment baseline initialized from current hosts; no diff prune this run."
+                            )
+                            if not dry_run_mode:
+                                try:
+                                    save_host_snapshot(ALIGN_SITES_STATE_FILE, current_hosts)
+                                    logger.info(
+                                        f"Site alignment baseline snapshot saved: {ALIGN_SITES_STATE_FILE}"
+                                    )
+                                except Exception as exc:
+                                    logger.warning(
+                                        f"Site alignment warning: could not save baseline snapshot: {exc}"
+                                    )
+                        else:
+                            baseline_hosts = snapshot_hosts
+                            baseline_source = str(ALIGN_SITES_STATE_FILE)
+
+                if baseline_ready:
+                    removed_hosts = removed_hosts_for_diff(baseline_hosts, current_hosts)
+                    logger.info(
+                        f"Site alignment host diff: baseline={len(baseline_hosts)}, "
+                        f"current={len(current_hosts)}, removed={len(removed_hosts)}"
+                    )
+                    if baseline_source:
+                        logger.info(f"Site alignment baseline source: {baseline_source}")
+
+                    if removed_hosts or include_missing_source:
+                        try:
+                            alignment_report = align_mealie_recipes(
+                                mealie_url=MEALIE_URL,
+                                token=MEALIE_API_TOKEN,
+                                timeout=ALIGN_SITES_TIMEOUT,
+                                allowed_hosts=current_hosts,
+                                apply=not dry_run_mode,
+                                include_missing_source=include_missing_source,
+                                prune_hosts=removed_hosts,
+                                preview_limit=ALIGN_SITES_PREVIEW_LIMIT,
+                                logger=logger,
+                            )
+                        except Exception as exc:
+                            logger.warning(f"Site alignment failed: {exc}")
+                        else:
+                            logger.info(
+                                "Site alignment summary: "
+                                f"planned={alignment_report.candidate_count}, "
+                                f"deleted={alignment_report.deleted_count}, "
+                                f"failed={alignment_report.failed_count}"
+                            )
+                            if not dry_run_mode and using_state_snapshot and alignment_report.failed_count == 0:
+                                try:
+                                    save_host_snapshot(ALIGN_SITES_STATE_FILE, current_hosts)
+                                    logger.info(
+                                        f"Site alignment baseline snapshot updated: {ALIGN_SITES_STATE_FILE}"
+                                    )
+                                except Exception as exc:
+                                    logger.warning(
+                                        f"Site alignment warning: could not update baseline snapshot: {exc}"
+                                    )
+                    else:
+                        logger.info("Site alignment skipped: no removed hosts in diff scope.")
 
     storage = StorageManager()
     killer = GracefulKiller()

@@ -93,18 +93,30 @@ Example weekly schedule (Sunday 03:00):
 docker compose run --rm -e TASK=dredger -e RUN_MODE=schedule -e RUN_SCHEDULE_DAY=7 -e RUN_SCHEDULE_TIME=03:00 mealie-recipe-dredger
 ```
 
-## 6. One-time cleanup for removed domains
+## 6. Repeatable domain alignment (diff mode)
 
-Dry run to see what would be removed when comparing your current and baseline site files:
+For recurring runs, enable this in `.env`:
+- `ALIGN_RECIPES_WITH_SITES=true`
+
+Behavior:
+- Dredger aligns existing recipes before crawl using removed-domain diff scope (baseline -> current).
+- It does not delete every recipe outside the current site list.
+- Manual/external recipes remain unless their domain is explicitly in removed-domain scope.
+
+Baseline source priority:
+1. `--align-sites-baseline` or `ALIGN_SITES_BASELINE_FILE`
+2. rolling snapshot in `data/site_alignment_hosts.json` (`ALIGN_SITES_STATE_FILE`)
+
+Manual dry run:
 
 ```bash
-python3 scripts/oneoff/prune_by_sites.py --sites-file custom_sites.json --baseline-sites-file sites.json
+mealie-align-sites --sites-file data/sites.json --baseline-sites-file sites.json
 ```
 
-Apply deletions:
+Manual apply:
 
 ```bash
-python3 scripts/oneoff/prune_by_sites.py --sites-file custom_sites.json --baseline-sites-file sites.json --apply
+mealie-align-sites --sites-file data/sites.json --baseline-sites-file sites.json --apply
 ```
 
 ## Troubleshooting
