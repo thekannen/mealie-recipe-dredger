@@ -28,6 +28,7 @@ cp custom_sites.json data/sites.json
 When `data/sites.json` exists, entrypoint uses `SITES=/app/data/sites.json`.
 Because it lives under `data/`, updates from git do not overwrite it.
 If you do nothing here, `scripts/docker/update.sh` seeds `data/sites.json` once from repo `sites.json` when missing.
+The update script also seeds `data/sites.baseline.json` once from repo `sites.json` when missing.
 
 ## 3. Deploy/update
 
@@ -102,6 +103,7 @@ Behavior:
 - Dredger aligns existing recipes before crawl using removed-domain diff scope (baseline -> current).
 - It does not delete every recipe outside the current site list.
 - Manual/external recipes remain unless their domain is explicitly in removed-domain scope.
+- `TASK=align-sites` and `mealie-align-sites` require baseline file input by default.
 
 Baseline source priority:
 1. `--align-sites-baseline` or `ALIGN_SITES_BASELINE_FILE`
@@ -117,16 +119,22 @@ Manual apply:
 
 ```bash
 mealie-align-sites --sites-file data/sites.json --baseline-sites-file sites.json --apply
+# optional: force API backup before delete
+mealie-align-sites --sites-file data/sites.json --baseline-sites-file sites.json --apply --backup-before-apply
 ```
 
 Docker-native run (recommended for deployed environments):
 
 ```bash
-docker compose run --rm -e TASK=align-sites -e RUN_MODE=once mealie-recipe-dredger
-docker compose run --rm -e TASK=align-sites -e RUN_MODE=once -e ALIGN_SITES_BASELINE_FILE=/app/data/site_alignment_hosts.json -e ALIGN_SITES_APPLY=true mealie-recipe-dredger
+docker compose run --rm -e TASK=align-sites -e RUN_MODE=once -e ALIGN_SITES_BASELINE_FILE=/app/data/sites.baseline.json mealie-recipe-dredger
+docker compose run --rm -e TASK=align-sites -e RUN_MODE=once -e ALIGN_SITES_BASELINE_FILE=/app/data/sites.baseline.json -e ALIGN_SITES_APPLY=true mealie-recipe-dredger
+docker compose run --rm -e TASK=align-sites -e RUN_MODE=once -e ALIGN_SITES_BASELINE_FILE=/app/data/sites.baseline.json -e ALIGN_SITES_APPLY=true -e ALIGN_SITES_BACKUP_BEFORE_APPLY=true mealie-recipe-dredger
 ```
 
-For apply mode in Docker task runs, set `ALIGN_SITES_BASELINE_FILE` so pruning remains diff-scoped.
+Apply mode prompts `y/n` after preview and offers optional Mealie API backup before deletion.
+For automation/non-interactive runs, set `ALIGN_SITES_ASSUME_YES=true` and optionally `ALIGN_SITES_BACKUP_BEFORE_APPLY=true`.
+Unsafe fallback (`ALIGN_SITES_PRUNE_OUTSIDE_CURRENT=true`) is available but not recommended.
+Set `ALIGN_SITES_AUDIT_FILE` (for example `/app/data/site_alignment_candidates.json`) to persist full candidate lists for recovery.
 
 ## Troubleshooting
 

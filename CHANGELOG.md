@@ -10,6 +10,11 @@ All notable changes to this project will be documented in this file.
 
 ### Changed
 - **One-Off Cleanup Script Reused:** `scripts/oneoff/prune_by_sites.py` is now a compatibility wrapper around the shared site-alignment implementation.
+- **Safer Live Alignment Apply:** `--apply` now prompts for `y/n` confirmation after preview by default; `--yes` / `ALIGN_SITES_ASSUME_YES=true` allow non-interactive automation.
+- **Diff Logic Enforcement:** `mealie-align-sites` now requires `--baseline-sites-file` by default and only prunes baseline→current domain diffs; broad "outside current sites" pruning requires explicit unsafe opt-in.
+- **Docker Baseline Seeding:** `scripts/docker/update.sh` now seeds `data/sites.baseline.json` once from repo `sites.json` for easier diff runs.
+- **Alignment Candidate Audit Output:** Optional `ALIGN_SITES_AUDIT_FILE` / `--audit-file` now writes full candidate lists for recovery/audit before apply.
+- **Pre-Delete Backup Option:** Alignment apply mode now offers optional Mealie API backup (`POST /api/admin/backups`) and supports forced backup via `--backup-before-apply` / `ALIGN_SITES_BACKUP_BEFORE_APPLY=true`.
 
 ## [1.0.0-beta.14] - 2026-02-10
 

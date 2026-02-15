@@ -4,6 +4,8 @@ import argparse
 import json
 import logging
 import os
+import sys
+from datetime import datetime, timezone
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Optional, Set, Tuple
@@ -217,6 +219,36 @@ def delete_recipe(
     return False, "not found by id/slug"
 
 
+def create_mealie_backup(
+    mealie_url: str,
+    token: str,
+    timeout: int,
+    session: Optional[requests.Session] = None,
+) -> Tuple[bool, str]:
+    client = session or requests.Session()
+    headers = {"Authorization": f"Bearer {token}"}
+    endpoint = f"{mealie_url}/api/admin/backups"
+    try:
+        response = client.post(endpoint, headers=headers, timeout=timeout)
+    except Exception as exc:
+        return False, str(exc)
+
+    if response.status_code in (200, 201, 202):
+        message = ""
+        try:
+            payload = response.json()
+            if isinstance(payload, dict):
+                message = str(payload.get("message") or "").strip()
+        except Exception:
+            message = ""
+        return True, message or f"HTTP {response.status_code}"
+
+    body = response.text.strip().replace("\n", " ")
+    if len(body) > 180:
+        body = f"{body[:177]}..."
+    return False, f"HTTP {response.status_code}" + (f" - {body}" if body else "")
+
+
 @dataclass
 class Candidate:
     name: str
@@ -280,6 +312,11 @@ def align_mealie_recipes(
     include_missing_source: bool = False,
     prune_hosts: Optional[Set[str]] = None,
     preview_limit: int = 50,
+    audit_file: Optional[Path] = None,
+    backup_before_apply: bool = False,
+    prompt_backup_before_apply: bool = False,
+    require_confirmation: bool = False,
+    assume_yes: bool = False,
     session: Optional[requests.Session] = None,
     logger: Optional[logging.Logger] = None,
 ) -> AlignmentReport:
@@ -320,9 +357,91 @@ def align_mealie_recipes(
     if len(candidates) > limit:
         active_logger.info(f"[align][plan] ... and {len(candidates) - limit} more")
 
+    if audit_file:
+        try:
+            audit_file.parent.mkdir(parents=True, exist_ok=True)
+            audit_payload = {
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "mode": "apply" if apply else "dry_run",
+                "candidate_count": len(candidates),
+                "missing_source_count": missing_source_count,
+                "candidates": [
+                    {
+                        "name": item.name,
+                        "host": item.host,
+                        "source": item.source_value,
+                        "recipe_id": item.recipe_identifier,
+                        "slug": item.slug,
+                    }
+                    for item in candidates
+                ],
+            }
+            audit_file.write_text(json.dumps(audit_payload, indent=2), encoding="utf-8")
+            active_logger.info(f"[align][info] Candidate audit written: {audit_file}")
+        except Exception as exc:
+            active_logger.warning(f"[align][warn] Failed to write audit file '{audit_file}': {exc}")
+
     deleted = 0
     failed = 0
     if apply:
+        if candidates and require_confirmation:
+            if not assume_yes:
+                if not sys.stdin.isatty():
+                    raise RuntimeError("Refusing apply in non-interactive mode without --yes.")
+                answer = input(f"[align][confirm] Delete {len(candidates)} recipe(s)? [y/N]: ").strip().lower()
+                if answer not in {"y", "yes"}:
+                    active_logger.info("[align] Apply cancelled by user.")
+                    return AlignmentReport(
+                        total_recipes=len(recipes),
+                        missing_source_count=missing_source_count,
+                        candidate_count=len(candidates),
+                        deleted_count=0,
+                        failed_count=0,
+                    )
+
+        should_backup = bool(backup_before_apply)
+        if candidates and prompt_backup_before_apply and not should_backup:
+            if not sys.stdin.isatty():
+                active_logger.warning("[align][warn] Skipping backup prompt in non-interactive mode.")
+            else:
+                answer = input("[align][confirm] Create a Mealie backup before deletions? [y/N]: ").strip().lower()
+                if answer in {"y", "yes"}:
+                    should_backup = True
+
+        if candidates and should_backup:
+            backup_ok, backup_detail = create_mealie_backup(
+                mealie_url=mealie_url,
+                token=token,
+                timeout=timeout,
+                session=session,
+            )
+            if backup_ok:
+                active_logger.info(
+                    f"[align][backup] Backup created successfully{f': {backup_detail}' if backup_detail else ''}"
+                )
+            else:
+                active_logger.error(f"[align][backup] Backup failed: {backup_detail}")
+                if not assume_yes and sys.stdin.isatty():
+                    proceed = input("[align][confirm] Continue without backup? [y/N]: ").strip().lower()
+                    if proceed not in {"y", "yes"}:
+                        active_logger.info("[align] Apply cancelled due to backup failure.")
+                        return AlignmentReport(
+                            total_recipes=len(recipes),
+                            missing_source_count=missing_source_count,
+                            candidate_count=len(candidates),
+                            deleted_count=0,
+                            failed_count=0,
+                        )
+                else:
+                    active_logger.info("[align] Apply cancelled due to backup failure.")
+                    return AlignmentReport(
+                        total_recipes=len(recipes),
+                        missing_source_count=missing_source_count,
+                        candidate_count=len(candidates),
+                        deleted_count=0,
+                        failed_count=0,
+                    )
+
         for item in candidates:
             ok, detail = delete_recipe(
                 mealie_url=mealie_url,
@@ -354,8 +473,7 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
             "Align existing Mealie recipes against site-domain policy. "
-            "By default, prunes hosts not in --sites-file. "
-            "If --baseline-sites-file is set, prunes only hosts removed from baseline -> current."
+            "By default, compares --baseline-sites-file -> --sites-file and prunes only removed domains."
         ),
     )
     parser.add_argument(
@@ -366,7 +484,15 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     parser.add_argument(
         "--baseline-sites-file",
         default="",
-        help="Optional baseline/original sites JSON. If set, only removed domains are pruned.",
+        help="Baseline/original sites JSON used for diff scope.",
+    )
+    parser.add_argument(
+        "--prune-outside-current",
+        action="store_true",
+        help=(
+            "Unsafe mode: prune recipes whose host is not in current sites, even without baseline diff. "
+            "Not recommended."
+        ),
     )
     parser.add_argument(
         "--mealie-url",
@@ -390,10 +516,25 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
         help="Apply deletions. If omitted, runs in dry-run mode.",
     )
     parser.add_argument(
+        "--yes",
+        action="store_true",
+        help="Skip confirmation prompt when used with --apply.",
+    )
+    parser.add_argument(
+        "--backup-before-apply",
+        action="store_true",
+        help="Create a Mealie backup via API before deleting recipes.",
+    )
+    parser.add_argument(
         "--preview-limit",
         type=int,
         default=50,
         help="How many candidate lines to print before summarizing.",
+    )
+    parser.add_argument(
+        "--audit-file",
+        default=os.getenv("ALIGN_SITES_AUDIT_FILE", ""),
+        help="Optional JSON file path to write full candidate list before apply/dry-run.",
     )
     return parser.parse_args(argv)
 
@@ -426,6 +567,7 @@ def run_from_args(args: argparse.Namespace, logger: Optional[logging.Logger] = N
 
     baseline_hosts: Optional[Set[str]] = None
     prune_hosts: Optional[Set[str]] = None
+    unsafe_outside_current = bool(getattr(args, "prune_outside_current", False))
     if args.baseline_sites_file:
         baseline_file = Path(args.baseline_sites_file)
         if not baseline_file.exists():
@@ -437,11 +579,19 @@ def run_from_args(args: argparse.Namespace, logger: Optional[logging.Logger] = N
             active_logger.error(f"[align][error] Failed to parse baseline sites file: {exc}")
             return 1
         prune_hosts = removed_hosts_for_diff(baseline_hosts, current_hosts)
+    elif not unsafe_outside_current:
+        active_logger.error(
+            "[align][error] Baseline sites file is required for diff mode. "
+            "Provide --baseline-sites-file (recommended), or explicitly use --prune-outside-current (unsafe)."
+        )
+        return 1
 
     active_logger.info(f"[align][info] Current hosts from {sites_file}: {len(current_hosts)}")
     if baseline_hosts is not None and prune_hosts is not None:
         active_logger.info(f"[align][info] Baseline hosts from {args.baseline_sites_file}: {len(baseline_hosts)}")
         active_logger.info(f"[align][info] Removed hosts in scope: {len(prune_hosts)}")
+    if unsafe_outside_current and baseline_hosts is None:
+        active_logger.warning("[align][warn] Unsafe mode enabled: pruning hosts outside current sites list.")
     active_logger.info(f"[align][info] Mode: {'APPLY' if args.apply else 'DRY RUN'}")
 
     try:
@@ -454,6 +604,11 @@ def run_from_args(args: argparse.Namespace, logger: Optional[logging.Logger] = N
             include_missing_source=args.include_missing_source,
             prune_hosts=prune_hosts,
             preview_limit=args.preview_limit,
+            audit_file=Path(args.audit_file) if args.audit_file else None,
+            backup_before_apply=args.apply and args.backup_before_apply,
+            prompt_backup_before_apply=args.apply and not args.yes and not args.backup_before_apply,
+            require_confirmation=args.apply and not args.yes,
+            assume_yes=args.yes,
         )
     except Exception as exc:
         active_logger.error(f"[align][error] Failed to align recipes: {exc}")

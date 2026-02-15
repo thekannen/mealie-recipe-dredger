@@ -95,11 +95,17 @@ echo "[start] Current commit: $(git rev-parse --short HEAD)"
 
 # Seed runtime sites file once for easier first-time deploys.
 RUNTIME_SITES_FILE="$REPO_ROOT/data/sites.json"
+RUNTIME_BASELINE_FILE="$REPO_ROOT/data/sites.baseline.json"
 DEFAULT_SITES_FILE="$REPO_ROOT/sites.json"
 if [ ! -f "$RUNTIME_SITES_FILE" ] && [ -f "$DEFAULT_SITES_FILE" ]; then
   mkdir -p "$(dirname "$RUNTIME_SITES_FILE")"
   cp "$DEFAULT_SITES_FILE" "$RUNTIME_SITES_FILE"
   echo "[init] Seeded runtime sites file: $RUNTIME_SITES_FILE"
+fi
+if [ ! -f "$RUNTIME_BASELINE_FILE" ] && [ -f "$DEFAULT_SITES_FILE" ]; then
+  mkdir -p "$(dirname "$RUNTIME_BASELINE_FILE")"
+  cp "$DEFAULT_SITES_FILE" "$RUNTIME_BASELINE_FILE"
+  echo "[init] Seeded baseline sites file: $RUNTIME_BASELINE_FILE"
 fi
 
 if [ "$SKIP_GIT_PULL" != true ]; then

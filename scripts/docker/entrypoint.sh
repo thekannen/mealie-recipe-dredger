@@ -8,10 +8,19 @@ RUN_SCHEDULE_DAY="${RUN_SCHEDULE_DAY:-7}"
 RUN_SCHEDULE_TIME="${RUN_SCHEDULE_TIME:-03:00}"
 RUNTIME_SITES_FILE="${RUNTIME_SITES_FILE:-/app/data/sites.json}"
 ALIGN_SITES_APPLY="${ALIGN_SITES_APPLY:-false}"
+ALIGN_SITES_BASELINE_FILE="${ALIGN_SITES_BASELINE_FILE:-}"
+ALIGN_SITES_PRUNE_OUTSIDE_CURRENT="${ALIGN_SITES_PRUNE_OUTSIDE_CURRENT:-false}"
+ALIGN_SITES_BACKUP_BEFORE_APPLY="${ALIGN_SITES_BACKUP_BEFORE_APPLY:-false}"
 
 run_align_sites_task() {
-  if [ "$ALIGN_SITES_APPLY" = "true" ] && [ -z "${ALIGN_SITES_BASELINE_FILE:-}" ]; then
-    echo "[error] ALIGN_SITES_APPLY=true requires ALIGN_SITES_BASELINE_FILE for diff-scoped pruning."
+  local baseline_file="$ALIGN_SITES_BASELINE_FILE"
+  if [ -z "$baseline_file" ] && [ -f /app/data/sites.baseline.json ]; then
+    baseline_file="/app/data/sites.baseline.json"
+  fi
+
+  if [ "$ALIGN_SITES_PRUNE_OUTSIDE_CURRENT" != "true" ] && [ -z "$baseline_file" ]; then
+    echo "[error] Missing baseline for diff mode."
+    echo "        Set ALIGN_SITES_BASELINE_FILE (recommended), or set ALIGN_SITES_PRUNE_OUTSIDE_CURRENT=true (unsafe)."
     exit 1
   fi
 
@@ -22,8 +31,8 @@ run_align_sites_task() {
     cmd+=(--sites-file "$SITES")
   fi
 
-  if [ -n "${ALIGN_SITES_BASELINE_FILE:-}" ]; then
-    cmd+=(--baseline-sites-file "$ALIGN_SITES_BASELINE_FILE")
+  if [ -n "$baseline_file" ]; then
+    cmd+=(--baseline-sites-file "$baseline_file")
   fi
 
   if [ -n "${ALIGN_SITES_TIMEOUT:-}" ]; then
@@ -34,12 +43,28 @@ run_align_sites_task() {
     cmd+=(--preview-limit "$ALIGN_SITES_PREVIEW_LIMIT")
   fi
 
+  if [ -n "${ALIGN_SITES_AUDIT_FILE:-}" ]; then
+    cmd+=(--audit-file "$ALIGN_SITES_AUDIT_FILE")
+  fi
+
   if [ "${ALIGN_SITES_INCLUDE_MISSING_SOURCE:-false}" = "true" ]; then
     cmd+=(--include-missing-source)
   fi
 
+  if [ "$ALIGN_SITES_PRUNE_OUTSIDE_CURRENT" = "true" ]; then
+    cmd+=(--prune-outside-current)
+  fi
+
   if [ "$ALIGN_SITES_APPLY" = "true" ]; then
     cmd+=(--apply)
+  fi
+
+  if [ "$ALIGN_SITES_BACKUP_BEFORE_APPLY" = "true" ]; then
+    cmd+=(--backup-before-apply)
+  fi
+
+  if [ "${ALIGN_SITES_ASSUME_YES:-false}" = "true" ]; then
+    cmd+=(--yes)
   fi
 
   "${cmd[@]}"

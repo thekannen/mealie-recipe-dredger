@@ -1,10 +1,16 @@
 from __future__ import annotations
 
+from argparse import Namespace
+
+import pytest
+
 from mealie_recipe_dredger.site_alignment import (
     build_candidates,
+    align_mealie_recipes,
     host_allowed,
     hosts_from_sites,
     removed_hosts_for_diff,
+    run_from_args,
     save_host_snapshot,
     load_host_snapshot,
 )
@@ -55,3 +61,110 @@ def test_host_snapshot_round_trip(tmp_path) -> None:
 
     loaded = load_host_snapshot(snapshot_file)
     assert loaded == {"example.com", "legacy.test.com"}
+
+
+def test_apply_requires_interactive_without_yes(monkeypatch) -> None:
+    monkeypatch.setattr("mealie_recipe_dredger.site_alignment.get_recipes", lambda **kwargs: [
+        {"name": "Remove Me", "orgURL": "https://old.example.com/r1", "id": "1", "slug": "remove-me"}
+    ])
+
+    with pytest.raises(RuntimeError):
+        align_mealie_recipes(
+            mealie_url="http://mealie.local",
+            token="token",
+            timeout=10,
+            allowed_hosts={"active.example.com"},
+            prune_hosts={"old.example.com"},
+            apply=True,
+            require_confirmation=True,
+            assume_yes=False,
+        )
+
+
+def test_run_from_args_requires_baseline_by_default(tmp_path) -> None:
+    sites_file = tmp_path / "sites.json"
+    sites_file.write_text('["https://example.com"]', encoding="utf-8")
+
+    args = Namespace(
+        sites_file=str(sites_file),
+        baseline_sites_file="",
+        prune_outside_current=False,
+        mealie_url="http://mealie.local",
+        token="token",
+        timeout=10,
+        include_missing_source=False,
+        apply=False,
+        yes=False,
+        backup_before_apply=False,
+        preview_limit=5,
+        audit_file="",
+    )
+
+    assert run_from_args(args) == 1
+
+
+def test_run_from_args_allows_unsafe_override(tmp_path, monkeypatch) -> None:
+    sites_file = tmp_path / "sites.json"
+    sites_file.write_text('["https://example.com"]', encoding="utf-8")
+    called = {"value": False}
+
+    def fake_align_mealie_recipes(**kwargs):
+        called["value"] = True
+        assert kwargs["prune_hosts"] is None
+        return type(
+            "Report",
+            (),
+            {"candidate_count": 0, "deleted_count": 0, "failed_count": 0},
+        )()
+
+    monkeypatch.setattr("mealie_recipe_dredger.site_alignment.align_mealie_recipes", fake_align_mealie_recipes)
+
+    args = Namespace(
+        sites_file=str(sites_file),
+        baseline_sites_file="",
+        prune_outside_current=True,
+        mealie_url="http://mealie.local",
+        token="token",
+        timeout=10,
+        include_missing_source=False,
+        apply=False,
+        yes=False,
+        backup_before_apply=False,
+        preview_limit=5,
+        audit_file="",
+    )
+
+    assert run_from_args(args) == 0
+    assert called["value"] is True
+
+
+def test_backup_failure_aborts_apply(monkeypatch) -> None:
+    monkeypatch.setattr("mealie_recipe_dredger.site_alignment.get_recipes", lambda **kwargs: [
+        {"name": "Remove Me", "orgURL": "https://old.example.com/r1", "id": "1", "slug": "remove-me"}
+    ])
+    monkeypatch.setattr(
+        "mealie_recipe_dredger.site_alignment.create_mealie_backup",
+        lambda **kwargs: (False, "backup failed"),
+    )
+
+    def fail_delete(**kwargs):
+        raise AssertionError("delete_recipe should not run when backup fails")
+
+    monkeypatch.setattr("mealie_recipe_dredger.site_alignment.delete_recipe", fail_delete)
+
+    report = align_mealie_recipes(
+        mealie_url="http://mealie.local",
+        token="token",
+        timeout=10,
+        allowed_hosts={"active.example.com"},
+        prune_hosts={"old.example.com"},
+        apply=True,
+        backup_before_apply=True,
+        prompt_backup_before_apply=False,
+        require_confirmation=False,
+        assume_yes=True,
+    )
+
+    assert report.candidate_count == 1
+    assert report.deleted_count == 0
+    assert report.failed_count == 0

@@ -67,6 +67,7 @@ cp custom_sites.json data/sites.json
 If `data/sites.json` exists, Docker runtime uses it via `SITES=/app/data/sites.json`.
 Because it lives under `data/`, git updates do not overwrite it.
 If you skip this step, `./scripts/docker/update.sh` seeds `data/sites.json` once from repo `sites.json` when missing.
+`./scripts/docker/update.sh` also seeds `data/sites.baseline.json` once from repo `sites.json` when missing.
 
 4. Deploy/update:
 
@@ -103,8 +104,8 @@ docker compose run --rm -e TASK=dredger -e RUN_MODE=schedule -e RUN_SCHEDULE_DAY
 # run cleaner once
 docker compose run --rm -e TASK=cleaner -e RUN_MODE=once mealie-recipe-dredger
 
-# run site alignment once (dry run by default)
-docker compose run --rm -e TASK=align-sites -e RUN_MODE=once mealie-recipe-dredger
+# run site alignment once (dry run; diff baseline vs current)
+docker compose run --rm -e TASK=align-sites -e RUN_MODE=once -e ALIGN_SITES_BASELINE_FILE=/app/data/sites.baseline.json mealie-recipe-dredger
 ```
 
 ## Update and redeploy
@@ -220,6 +221,7 @@ Enable `ALIGN_RECIPES_WITH_SITES=true` to run alignment before each `mealie-dred
 
 - Alignment uses domain diff scope (baseline -> current), not "delete everything outside current sites".
 - This preserves manual/external recipes unless their host is explicitly in removed-domain scope.
+- `mealie-align-sites` and `TASK=align-sites` require a baseline file by default.
 - Baseline source priority for dredger alignment:
 1. CLI `--align-sites-baseline` or env `ALIGN_SITES_BASELINE_FILE`
 2. rolling snapshot `data/site_alignment_hosts.json` (`ALIGN_SITES_STATE_FILE`), auto-initialized/updated on live runs
@@ -234,6 +236,8 @@ Manual apply:
 
 ```bash
 mealie-align-sites --sites-file data/sites.json --baseline-sites-file sites.json --apply
+# optional: force API backup before delete
+mealie-align-sites --sites-file data/sites.json --baseline-sites-file sites.json --apply --backup-before-apply
 ```
 
 Backward-compatible wrapper:
@@ -245,11 +249,15 @@ python3 scripts/oneoff/prune_by_sites.py --sites-file data/sites.json --baseline
 Docker-native run (uses env_file and runtime `SITES` automatically):
 
 ```bash
-docker compose run --rm -e TASK=align-sites -e RUN_MODE=once mealie-recipe-dredger
-docker compose run --rm -e TASK=align-sites -e RUN_MODE=once -e ALIGN_SITES_BASELINE_FILE=/app/data/site_alignment_hosts.json -e ALIGN_SITES_APPLY=true mealie-recipe-dredger
+docker compose run --rm -e TASK=align-sites -e RUN_MODE=once -e ALIGN_SITES_BASELINE_FILE=/app/data/sites.baseline.json mealie-recipe-dredger
+docker compose run --rm -e TASK=align-sites -e RUN_MODE=once -e ALIGN_SITES_BASELINE_FILE=/app/data/sites.baseline.json -e ALIGN_SITES_APPLY=true mealie-recipe-dredger
+docker compose run --rm -e TASK=align-sites -e RUN_MODE=once -e ALIGN_SITES_BASELINE_FILE=/app/data/sites.baseline.json -e ALIGN_SITES_APPLY=true -e ALIGN_SITES_BACKUP_BEFORE_APPLY=true mealie-recipe-dredger
 ```
 
-For destructive apply in Docker task mode, set `ALIGN_SITES_BASELINE_FILE` so pruning stays diff-scoped.
+Live apply shows a `y/n` confirmation after preview and offers optional Mealie API backup before deletion.
+For automation/non-interactive runs, set `ALIGN_SITES_ASSUME_YES=true` and optionally `ALIGN_SITES_BACKUP_BEFORE_APPLY=true`.
+Unsafe fallback (`--prune-outside-current` / `ALIGN_SITES_PRUNE_OUTSIDE_CURRENT=true`) is available but not recommended.
+Set `ALIGN_SITES_AUDIT_FILE` (for example `/app/data/site_alignment_candidates.json`) to save full candidate lists for recovery/audit.
 
 ### Performance tuning
 
